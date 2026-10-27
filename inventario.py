@@ -14,6 +14,12 @@ estrutural, que nenhuma heuristica pega.
 
 Uso:
     python inventario.py
+
+---
+    lê o Survival_data.csv, registra o SHA-256, perfila as 121 colunas (tipo inferido, cobertura, cardinalidade) e sugere um papel por 
+    heurística de nome (id, alvo_iris, desfecho, terapia, alvo_comorbidade, excluir; na dúvida, entrada).
+    Grava o rascunho de dados/dicionario_variaveis.csv. A coluna papel foi revisada à mão depois: é na revisão que se identifica vazamento estrutural (
+    subestadiamento calculado, terapia posterior, desfecho recodificado), que nenhuma heurística pega.
 """
 
 from __future__ import annotations
