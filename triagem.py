@@ -21,6 +21,23 @@ Tudo isso aprende dos dados e pertence ao pipeline, dentro do fold.
 
 Uso:
     python triagem.py
+
+
+    ----
+
+
+    do arquivo bruto às duas coortes
+    Valida o dicionário; converte números gravados como texto e as datas (explicitamente, dia primeiro, porque comparar datas como texto dá ordem alfabética); 
+    deriva os achados _pre (verdadeiro só se anterior ou simultâneo ao diagnóstico; conta os positivos posteriores descartados); 
+    aplica as faixas de plausibilidade; 
+    compara os 124 com estágio contra os 501 sem estágio (validade externa; o desfecho fica fora da tabela, por ser consequência); 
+    aplica a cascata de inclusão (estágio presente → datas consistentes → diagnóstico na janela → sem injúria aguda → ao menos metade das entradas preenchidas) contando cada corte; 
+    monta os mapas de ausência (por variável, por registro e coausência de exames, insumo do recomendador) e a cobertura informativa descontando sentinelas; 
+    aplica as decisões de entrada (troca o achado cru pelo _pre, descarta as seis de conteúdo insuficiente); 
+    cria os indicadores _ausente do conjunto de controle SO_AUSENCIAS; 
+    congela os conjuntos de variáveis da ablação (FULL, SEM_CREATININA, SEM_SUBESTADIAMENTO, SEM_INDICADORES_EXAME, parcimoniosos etc.); 
+    faz a aritmética do desenho (menor classe com 18 → 3 a 4 por partição de teste; holdout inviável). 
+    Grava coorte.parquet (123), coorte_comorbidades.parquet (618, mesmos critérios sem exigir estágio), conjuntos_variaveis.json, as tabelas e a figura da cascata.
 """
 
 from __future__ import annotations
