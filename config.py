@@ -7,6 +7,19 @@ de inclusao, conjuntos de variaveis, configuracao do sistema, exames
 recomendaveis, comorbidades modelaveis e parametros da camada interpretativa.
 Os nomes de colunas e as faixas foram preenchidos a partir do inventario das
 colunas (`inventario.py`) e da revisao manual do dicionario de variaveis.
+
+não executa nada; 
+concentra toda decisão do projeto para que os outros scripts só leiam daqui.
+Caminhos e semente (42); 
+como ler o CSV (quais textos viram ausente; as sentinelas “Not recorded”, “Not tested” não viram ausente, ficam como categoria, porque dizem algo sobre a consulta); 
+nomes das colunas-chave (estágio IRIS, creatinina, UPC, pressão); colunas de data e a janela do estudo (2012 a 2013); 
+a coluna de injúria renal aguda; os limiares IRIS em µmol/L (140, 250, 440); as faixas de plausibilidade (fora delas vira ausente); 
+os pares achado + “first recorded” que geram as variáveis _pre; os três tratamentos de ausentes; 
+o conjunto do sistema (SEM_INDICADORES_EXAME, 18 variáveis) e a configuração do sistema (gradiente, sem correção de desbalanceamento), que todas as análises descritivas leem daqui, e não do que um passo de seleção elegeu; os quatro exames recomendáveis e a ordem fixa; os custos ilustrativos; 
+as quatro comorbidades modeláveis; 
+os conjuntos de Bradley; 
+o desenho de validação (5 partições × 3 repetições) e o modelo de linguagem com versão fixada.
+
 """
 
 from __future__ import annotations
