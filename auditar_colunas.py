@@ -13,6 +13,12 @@ humana. Nao decide nada: aponta.
 Uso:
     python auditar_colunas.py
     python auditar_colunas.py --papel entrada     # so as variaveis de entrada
+
+
+    --
+    inspeciona todas as colunas e só aponta, não decide: valores fora da faixa ou códigos-sentinela numéricos (999), sentinelas textuais, colunas em que “FALSE” 
+    e “None recorded” convivem, e os qualificadores temporais (em texto ou em data) que não foram aproveitados. 
+    Nasceu do caso da hipertensão, cujo qualificador era uma data e foi descartado inteiro sem aviso.
 """
 
 from __future__ import annotations
