@@ -1,0 +1,18 @@
+# Versoes fixadas: as da maquina onde os numeros do TCC foram gerados.
+# Mesma semente com versoes diferentes de xgboost e scikit-learn produz
+# resultados diferentes. Nao trocar por ">=".
+pandas==2.3.0
+numpy==2.2.4
+pyarrow==25.0.1
+matplotlib==3.10.1
+scikit-learn==1.7.2
+imbalanced-learn==0.14.2
+xgboost==3.2.0
+lifelines==0.30.3
+shap==0.51.0   # 0.52+ exige Python 3.12
+
+# Camada interpretativa
+pymupdf==1.28.2
+faiss-cpu==1.15.1
+openai==3.19.2
+sentence-transformers==6.1.0   # baixa o PyTorch; a instalacao e demorada

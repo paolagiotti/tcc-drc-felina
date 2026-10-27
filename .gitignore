@@ -1,0 +1,43 @@
+# Dados de origem (Conroy; O'Neill, 2019): a licenca CC BY-NC-ND 4.0 nao
+# autoriza redistribuir o arquivo nem versoes modificadas dele.
+Survival_data.csv
+risk_factor_data.csv
+Prevalence_study_data.csv
+dados/bruto/
+dados/*.parquet
+saida/
+
+# Base de conhecimento da camada interpretativa: documentos de terceiros.
+base_conhecimento/
+
+# Execucoes finais e pacotes (contem dados derivados e respostas pagas).
+entregas/
+rodada_final_*/
+camada_v2_*/
+*.zip
+
+# Chaves e segredos
+.env
+*.key
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# Sistema e editores
+.DS_Store
+.vscode/
+.idea/
+
+# Rascunhos e material de trabalho que nao fazem parte do codigo
+docs/
+
+# Material de trabalho na raiz: so o README e publicado
+/*.md
+!/README.md
+/arrumar.sh
+/*outputs/
