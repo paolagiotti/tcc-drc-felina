@@ -8,6 +8,18 @@ cruzada. Nada aqui e ajustado sobre o conjunto completo.
 
 Este modulo nao executa nada sozinho: e importado por `experimento_iris.py` e
 pelos demais scripts que ajustam o modelo de estadiamento.
+----
+
+biblioteca, não roda sozinho 
+Regra única: tudo que aprende dos dados (imputar, padronizar, codificar, balancear) vive dentro do Pipeline e é reajustado 
+em cada partição de treino, nunca no conjunto inteiro. 
+Três pré-processadores: nativo (ausente passa ao modelo; só codificação das categóricas), imputar (IterativeImputer + padronização) e indicador (imputação mais uma coluna de ausência). 
+Três braços de desbalanceamento, nunca acumulados: peso, SMOTE (k limitado pela menor classe do treino) e nenhum. 
+Três estimadores com hiperparâmetros fixados a priori pelo tamanho da amostra, sem busca: logística, floresta e XGBoost. 
+O XGBOrdinal é um adaptador: o XGBoost exige classes a partir de zero e não aceita class_weight; 
+sem ele, o braço de ponderação seria silenciosamente igual ao sem correção. 
+A regra_iris é o piso de comparação (140 exatos é estágio 2).
+
 """
 
 from __future__ import annotations
