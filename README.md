@@ -192,9 +192,3 @@ O código está sob a licença MIT (arquivo `LICENSE`). O conjunto de dados
 (CC BY-NC-ND 4.0) e os documentos da base de conhecimento pertencem aos seus
 autores e não são redistribuídos aqui.
 
-## Como citar
-
-CARDOSO, Paola Giotti. *Sistema computacional de apoio à decisão clínica para
-interpretação laboratorial e estadiamento da doença renal crônica em felinos*.
-2026. Trabalho de Conclusão de Curso (Bacharelado em Engenharia de Software),
-Universidade do Vale do Rio dos Sinos, São Leopoldo, 2026.
