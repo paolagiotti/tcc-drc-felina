@@ -16,8 +16,8 @@ def test_limiares_iris_sao_contiguos():
 def test_configuracao_do_sistema_e_coerente():
     cs = cfg.CONFIGURACAO_SISTEMA
     assert cs["conjunto"] == cfg.CONJUNTO_SISTEMA
-    assert cs["modelo"] in {"logistica", "floresta", "gradiente"}
-    assert cs["braco"] in {"peso", "smote", "nenhum"}
+    assert cs["modelo"] in {"floresta", "gradiente"}
+    assert cs["braco"] in {"peso", "nenhum"}
 
 
 def test_exames_recomendaveis_e_custos_batem():
@@ -44,11 +44,10 @@ def test_comorbidades_modelaveis_tem_qualificador_temporal():
     assert set(cfg.COMORBIDADES_MODELAVEIS) <= achados
 
 
-def test_conjuntos_parcimoniosos():
-    assert set(cfg.CONJUNTO_PARCIMONIOSO) < set(cfg.CONJUNTO_PARCIMONIOSO_MAIS)
-    assert cfg.COL_CREATININA in cfg.CONJUNTO_PARCIMONIOSO
-    assert {cfg.COL_UPC, cfg.COL_PAS} <= set(cfg.CONJUNTO_PARCIMONIOSO_MAIS)
-    assert not set(cfg.DESCARTAR_POR_BAIXO_CONTEUDO) & set(cfg.CONJUNTO_PARCIMONIOSO_MAIS)
+def test_variaveis_de_bradley():
+    assert len(cfg.VARIAVEIS_BRADLEY) == 4
+    assert cfg.COL_CREATININA in cfg.VARIAVEIS_BRADLEY
+    assert not set(cfg.DESCARTAR_POR_BAIXO_CONTEUDO) & set(cfg.VARIAVEIS_BRADLEY)
 
 
 def test_papeis():
@@ -64,7 +63,6 @@ def test_versao_do_modelo_de_linguagem():
 
 def test_desenho_de_validacao():
     assert cfg.N_FOLDS == 5 and cfg.N_REPETICOES == 3
-    assert 0 < cfg.FRACAO_HOLDOUT < 1
     assert 0 < cfg.PROP_MINIMA_PREENCHIDA <= 1
 
 

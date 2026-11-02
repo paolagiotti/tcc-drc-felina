@@ -83,23 +83,19 @@ def test_preprocessador_indicador_acrescenta_coluna_de_ausencia():
     assert ind.shape[1] == base.shape[1] + 1     # so x1 tem ausentes
 
 
-def test_k_vizinhos_seguro_limitado_pela_menor_classe():
-    y = pd.Series([1] * 10 + [2] * 3)
-    assert mdl.k_vizinhos_seguro(y) == 2
-    assert mdl.k_vizinhos_seguro(pd.Series([1] * 10 + [2] * 10)) == 3
-    assert mdl.k_vizinhos_seguro(pd.Series([1] * 10 + [2])) == 1
-
-
-def test_braco_desconhecido_e_recusado():
+@pytest.mark.parametrize("braco", ["dobro", "smote"])
+def test_braco_desconhecido_e_recusado(braco):
     with pytest.raises(ValueError):
-        mdl.construir_pipeline(mdl.estimadores("nenhum")["floresta"], ["x1"], [], "dobro")
+        mdl.construir_pipeline(mdl.estimadores("nenhum")["floresta"], ["x1"], [], braco)
 
 
 def test_estimadores_disponiveis():
-    for braco in ("peso", "smote", "nenhum"):
-        assert {"logistica", "floresta", "gradiente"} <= set(mdl.estimadores(braco))
+    for braco in ("peso", "nenhum"):
+        assert list(mdl.estimadores(braco)) == ["floresta", "gradiente"]
     assert mdl.estimadores("peso")["floresta"].class_weight == "balanced"
     assert mdl.estimadores("nenhum")["floresta"].class_weight is None
+    assert mdl.estimadores("peso")["gradiente"].class_weight == "balanced"
+    assert mdl.estimadores("nenhum")["gradiente"].class_weight is None
 
 
 # ---------------------------------------------------------------- XGBOrdinal
@@ -107,7 +103,7 @@ def test_estimadores_disponiveis():
 def test_xgbordinal_aceita_rotulos_de_1_a_4():
     X, y = _dados()
     est = mdl.estimadores("nenhum")["gradiente"]
-    pipe = mdl.construir_pipeline(est, ["x1", "x2"], ["cat"], "nenhum", y, "nativo")
+    pipe = mdl.construir_pipeline(est, ["x1", "x2"], ["cat"], "nenhum", "nativo")
     pipe.fit(X, y)
     pred = pipe.predict(X)
     assert set(np.unique(pred)) <= {1, 2, 3, 4}
@@ -136,10 +132,33 @@ def test_xgbordinal_e_clonavel_pelo_sklearn():
     assert copia.get_params()["max_depth"] == 3 and copia.class_weight is None
 
 
-def test_pipeline_com_smote_usa_k_do_treino():
+@pytest.mark.parametrize("tratamento", ["imputar", "indicador"])
+def test_pipeline_com_imputacao_ajusta_e_prediz(tratamento):
     X, y = _dados()
-    est = mdl.estimadores("nenhum")["floresta"]
-    pipe = mdl.construir_pipeline(est, ["x1", "x2"], ["cat"], "smote", y, "imputar")
-    assert pipe.named_steps["smote"].k_neighbors == mdl.k_vizinhos_seguro(y)
+    est = mdl.estimadores("peso")["floresta"]
+    pipe = mdl.construir_pipeline(est, ["x1", "x2"], ["cat"], "peso", tratamento)
     pipe.fit(X, y)
     assert set(np.unique(pipe.predict(X))) <= {1, 2, 3, 4}
+
+
+def test_xgboost_nao_depende_da_escala():
+    """Por que nao ha padronizacao: no modelo do sistema, padronizar as
+    variaveis nao muda nenhuma probabilidade, nem fora da amostra. (Na
+    floresta, o limiar fica entre dois valores, e o arredondamento pode mudar o
+    lado de um valor que cai exatamente nele.)"""
+    from sklearn.preprocessing import StandardScaler
+    rng = np.random.default_rng(3)
+    n = 160
+    y = pd.Series(rng.integers(1, 5, size=n))
+    X = pd.DataFrame({                      # valores em grade, como os exames
+        "idade": rng.integers(2, 22, size=n).astype(float),
+        "creatinina": (y * 90 + rng.integers(-40, 40, size=n)).astype(float),
+        "densidade": np.round(1.045 - y * 0.007 + rng.normal(0, 0.004, n), 3)})
+    tr, te = np.arange(120), np.arange(120, n)
+    esc = StandardScaler().fit(X.iloc[tr])
+    Xp = pd.DataFrame(esc.transform(X), columns=X.columns)
+    p = mdl.estimadores("nenhum")["gradiente"].fit(X.iloc[tr], y.iloc[tr]) \
+        .predict_proba(X.iloc[te])
+    pp = mdl.estimadores("nenhum")["gradiente"].fit(Xp.iloc[tr], y.iloc[tr]) \
+        .predict_proba(Xp.iloc[te])
+    assert np.array_equal(p, pp)

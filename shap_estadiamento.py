@@ -1,30 +1,15 @@
 """
-Interpretabilidade por valores de Shapley (SHAP) para o componente de
-estadiamento.
-
-Duas saidas, com finalidades distintas:
-
-  GLOBAL   -- quanto cada variavel pesa no conjunto da coorte. Serve ao texto,
-              para mostrar que o modelo apoia-se em achados clinicamente
-              reconheciveis.
-  LOCAL    -- para cada gato, quanto cada variavel empurrou a predicao e em que
-              direcao. E o insumo da camada interpretativa: o texto que o
-              veterinario le nao diz "estagio 3", diz "estagio 3, porque ...".
-
-Ponto de desenho que sustenta a validade: as atribuicoes sao calculadas FORA DA
-AMOSTRA. Para cada particao, o modelo e ajustado no treino e explica apenas os
-registros de teste, que ele nao viu. Explicar registros usados no proprio treino
-produziria atribuicoes otimistas, pelo mesmo motivo que avaliar no treino produz
-acuracia otimista.
+Valores de Shapley (SHAP) do componente de estadiamento, calculados fora da
+amostra: em cada particao, o modelo e ajustado no treino e explica so os
+registros de teste. Saidas: importancia global, contribuicao por gato (insumo
+das fichas) e comparacao entre gatos com e sem creatinina.
 
 Uso:
     python shap_estadiamento.py
-    python shap_estadiamento.py --conjunto FULL --modelo floresta
 """
 
 from __future__ import annotations
 
-import argparse
 import warnings
 
 import numpy as np
@@ -39,11 +24,7 @@ SAIDA = cfg.SAIDA_RELATORIOS / "escopo1_shap"
 
 
 def _agrupar(nomes: list[str], colunas: list[str]) -> list[str]:
-    """Devolve, para cada coluna codificada, a variavel original de origem.
-
-    O codificador de categorias transforma uma variavel em varias colunas; sem
-    reagrupar, "Breed" apareceria fatiada em dezenas de contribuicoes pequenas.
-    """
+    """Variavel de origem de cada coluna codificada (reagrupa as categorias)."""
     saida = []
     for n in nomes:
         n = n.split("__", 1)[-1]
@@ -63,7 +44,7 @@ def calcular(df, y, colunas, nome_modelo, braco, tratamento, splits):
 
     for i, (tr, te) in enumerate(splits, 1):
         est = mdl.estimadores(braco)[nome_modelo]
-        pipe = mdl.construir_pipeline(est, num, cat, braco, y.iloc[tr], tratamento)
+        pipe = mdl.construir_pipeline(est, num, cat, braco, tratamento)
         pipe.fit(X.iloc[tr], y.iloc[tr])
 
         prep = pipe.named_steps["prep"]
@@ -71,9 +52,8 @@ def calcular(df, y, colunas, nome_modelo, braco, tratamento, splits):
         modelo = getattr(modelo, "modelo_", modelo)   # desembrulha o XGBOrdinal
         X_te = prep.transform(X.iloc[te])
 
-        # Os nomes sao recalculados a cada particao: o codificador de categorias
-        # ve categorias diferentes em cada treino e produz numero diferente de
-        # colunas. Reaproveitar os nomes de uma particao quebra na seguinte.
+        # Os nomes sao recalculados a cada particao: o codificador pode produzir
+        # colunas diferentes em cada treino.
         origem = _agrupar(list(prep.get_feature_names_out()), colunas)
         if contrib is None:
             contrib = pd.DataFrame(0.0, index=X.index, columns=sorted(colunas))
@@ -103,26 +83,19 @@ def calcular(df, y, colunas, nome_modelo, braco, tratamento, splits):
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="SHAP do componente de estadiamento.")
-    ap.add_argument("--conjunto", default=None)
-    ap.add_argument("--modelo", default="gradiente")
-    ap.add_argument("--braco", default="nenhum")
-    ap.add_argument("--ausentes", default="nativo")
-    args = ap.parse_args()
-
     SAIDA.mkdir(parents=True, exist_ok=True)
     df, y, conjuntos = mdl.carregar_coorte()
-    conj = args.conjunto or getattr(cfg, "CONJUNTO_SISTEMA", "SEM_INDICADORES_EXAME")
-    colunas = conjuntos[conj]
+    cs = cfg.CONFIGURACAO_SISTEMA
+    colunas = conjuntos[cs["conjunto"]]
     av.definir_classes(y)
 
-    print(f"[1] configuracao: {conj} | {args.modelo} | {args.braco} | "
-          f"ausentes={args.ausentes}")
+    print(f"[1] configuracao do sistema: {cs['conjunto']} | {cs['modelo']} | "
+          f"{cs['braco']} | ausentes nativos")
     print(f"    {len(df)} registros, {len(colunas)} variaveis")
 
     splits = av.materializar_splits(df, y)
     print(f"[2] calculando SHAP fora da amostra em {len(splits)} particoes")
-    contrib = calcular(df, y, colunas, args.modelo, args.braco, args.ausentes, splits)
+    contrib = calcular(df, y, colunas, cs["modelo"], cs["braco"], "nativo", splits)
 
     print("[3] importancia global (media do valor absoluto por registro)")
     glob = contrib.mean().sort_values(ascending=False)
@@ -162,8 +135,6 @@ def main() -> None:
     comp.to_csv(SAIDA / "shap_com_sem_creatinina.csv")
     print("    proporcao da explicacao, por grupo (8 maiores sem creatinina):")
     print("    " + comp.head(8).to_string().replace("\n", "\n    "))
-    print("\n    Responde o que o sistema usa quando o marcador definidor falta.")
-
     print(f"\nsaidas em {SAIDA}")
 
 
