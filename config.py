@@ -1,12 +1,6 @@
 """
-Configuracao central do projeto.
-
-Tudo que e decisao de projeto mora aqui, nao espalhado pelo codigo: caminhos,
-leitura do arquivo de origem, colunas-chave, faixas de plausibilidade, criterios
-de inclusao, conjuntos de variaveis, configuracao do sistema, exames
-recomendaveis, comorbidades modelaveis e parametros da camada interpretativa.
-Os nomes de colunas e as faixas foram preenchidos a partir do inventario das
-colunas (`inventario.py`) e da revisao manual do dicionario de variaveis.
+Configuracao central do projeto. Toda decisao parametrizada mora aqui; os
+demais scripts so leem.
 
 não executa nada; 
 concentra toda decisão do projeto para que os outros scripts só leiam daqui.
@@ -17,7 +11,7 @@ a coluna de injúria renal aguda; os limiares IRIS em µmol/L (140, 250, 440); a
 os pares achado + “first recorded” que geram as variáveis _pre; os três tratamentos de ausentes; 
 o conjunto do sistema (SEM_INDICADORES_EXAME, 18 variáveis) e a configuração do sistema (gradiente, sem correção de desbalanceamento), que todas as análises descritivas leem daqui, e não do que um passo de seleção elegeu; os quatro exames recomendáveis e a ordem fixa; os custos ilustrativos; 
 as quatro comorbidades modeláveis; 
-os conjuntos de Bradley; 
+as variáveis de Bradley (destacadas na figura do SHAP); 
 o desenho de validação (5 partições × 3 repetições) e o modelo de linguagem com versão fixada.
 
 """
@@ -31,15 +25,10 @@ from pathlib import Path
 # Caminhos
 # ---------------------------------------------------------------------------
 
-_AQUI = Path(__file__).resolve().parent
+RAIZ = Path(__file__).resolve().parent
 
-# Funciona com os arquivos dentro de uma pasta src/ ou soltos numa pasta so.
-RAIZ = _AQUI.parent if _AQUI.name == "src" else _AQUI
-
-# Onde procurar o CSV bruto, em ordem. A primeira que existir vence.
-# Da para sobrescrever sem editar nada:
-#   - variavel de ambiente:  export DRC_BRUTO=/caminho/Survival_data.csv
-#   - argumento de linha:    python triagem.py --bruto /caminho/arquivo.csv
+# Onde procurar o CSV de origem, em ordem. Tambem aceita a variavel de ambiente
+# DRC_BRUTO ou o argumento --bruto dos scripts que o leem.
 CANDIDATOS_BRUTO = [
     RAIZ / "dados" / "bruto" / "Survival_data.csv",
     RAIZ / "dados" / "Survival_data.csv",
@@ -49,7 +38,7 @@ CANDIDATOS_BRUTO = [
 
 
 def resolver_bruto(caminho_cli: str | None = None) -> Path:
-    """Descobre onde esta o CSV bruto. Falha com mensagem util se nao achar."""
+    """Localiza o CSV de origem; interrompe com mensagem util se nao achar."""
     if caminho_cli:
         p = Path(caminho_cli).expanduser().resolve()
         if not p.exists():
@@ -74,7 +63,6 @@ def resolver_bruto(caminho_cli: str | None = None) -> Path:
     )
 
 
-BRUTO = CANDIDATOS_BRUTO[0]          # valor nominal; resolver_bruto() manda
 DICIONARIO = RAIZ / "dados" / "dicionario_variaveis.csv"
 
 SAIDA = RAIZ / "saida"
@@ -85,52 +73,43 @@ SAIDA_FIGURAS = SAIDA / "figuras"
 SEMENTE = 42
 
 # ---------------------------------------------------------------------------
-# Leitura do arquivo bruto
+# Leitura do arquivo de origem
 # ---------------------------------------------------------------------------
 
 CSV_SEP = ","
-CSV_ENCODING = "utf-8"          # se falhar, tentar "latin-1"
+CSV_ENCODING = "utf-8"
 CSV_DECIMAL = "."
 
-# Strings que devem ser lidas como ausente. Dado retrospectivo de clinica
-# costuma ter varias grafias para a mesma coisa.
+# Grafias lidas como ausente.
 VALORES_AUSENTES = [
     "", " ", "NA", "N/A", "na", "n/a", "NaN", "nan", "NULL", "null",
     "-", "--", ".", "?", "UNK", "ND", "nd",
 ]
 
-# Sentinelas textuais desta coorte. Elas NAO sao lidas como ausente na carga,
-# porque a distincao importa: "Not recorded" significa que o veterinario nao
-# registrou o achado, e isso e informacao sobre a consulta, nao sobre o gato.
-# Sao contabilizadas a parte no relatorio de cobertura informativa, e a decisao
-# de trata-las como categoria ou como ausente e declarada no texto.
+# Sentinelas textuais da coorte. Nao sao lidas como ausente: "Not recorded"
+# informa que o veterinario nao registrou o achado, e isso e informacao sobre a
+# consulta. Entram como categoria propria e sao contadas a parte na cobertura.
 SENTINELAS = [
     "Not recorded", "None recorded", "Not tested", "Unknown", "not recorded",
     "not done", "unknown",
 ]
 
-# Abaixo deste percentual de valores informativos (nao ausentes e nao sentinela)
+# Abaixo deste percentual de valores informativos (nem ausentes nem sentinela)
 # no subconjunto rotulado, a variavel entra na lista de revisao.
 PROP_MINIMA_INFORMATIVA = 0.50
 
 # ---------------------------------------------------------------------------
 # Colunas-chave
 # ---------------------------------------------------------------------------
-# Nome exato da coluna no CSV; None para o que nao existe na coorte.
 
-COL_ID = "ID"                    # identificador do animal, se houver
-COL_IRIS = "Iris stage at diagnosis"                  # estagio IRIS no diagnostico
-COL_CREATININA = "Creatinine at diagnosis"            # creatinina serica no diagnostico
-COL_UPC = "UPC at diagnosis"                   # relacao proteina/creatinina urinaria
-COL_PAS = "Blood pressure at first measurement"                   # pressao arterial sistolica
-COL_TEMPO_SOBREVIDA = None       # tempo ate o desfecho (para Kaplan-Meier)
-COL_EVENTO_SOBREVIDA = None      # 1 = obito, 0 = censurado
+COL_ID = "ID"
+COL_IRIS = "Iris stage at diagnosis"
+COL_CREATININA = "Creatinine at diagnosis"
+COL_UPC = "UPC at diagnosis"
+COL_PAS = "Blood pressure at first measurement"
 
-# Colunas de data usadas na checagem de consistencia temporal.
-# Pares (data_inicial, data_final): a primeira nao pode ser posterior a segunda.
-# As datas do arquivo vem como texto no formato dd/mm/aaaa. Comparar texto e
-# silenciosamente errado ("19/06/2012" > "06/10/2014" em ordem alfabetica), por
-# isso as colunas de data sao convertidas explicitamente, e nao por inferencia.
+# Datas vem como texto dd/mm/aaaa e sao convertidas explicitamente (comparar
+# como texto daria ordem alfabetica).
 DIA_PRIMEIRO = True
 COLUNAS_DATA = [
     "Date of diagnosis",
@@ -138,48 +117,43 @@ COLUNAS_DATA = [
     "Date hypertension diagnosed",
 ]
 
+# Pares (data inicial, data final): a primeira nao pode ser posterior a segunda.
 PARES_DATAS: list[tuple[str, str]] = [
     ("Date of diagnosis", "Censored date"),
 ]
 
-# Janela do estudo. Diagnostico fora dela indica erro de registro.
+# Janela de recrutamento do estudo. Diagnostico fora dela indica erro de registro.
 JANELA_DIAGNOSTICO = ("2012-01-01", "2013-12-31")
 COL_DATA_DIAGNOSTICO = "Date of diagnosis"
 
-# Colunas ou marcadores que indicam injuria renal aguda associada.
-# Pode ser uma coluna binaria, ou uma coluna de texto com termos de busca.
-# `Previous AKI` registra Positive / Negative / Not tested, e 577 dos 625
-# estao em Not tested, o que torna o criterio inverificavel nesta coorte.
-# `Acute-on-chronic CKD` e a coluna booleana utilizavel, ainda que seja falsa
-# em todos os registros rotulados.
+# Injuria renal aguda associada: criterio de exclusao. `Previous AKI` esta em
+# "Not tested" em 577 dos 625 registros; a coluna utilizavel e a booleana.
 COL_IRA = "Acute-on-chronic CKD"
 TERMOS_IRA = ["true", "positive"]
 
 # ---------------------------------------------------------------------------
-# Unidades
+# Unidades e limiares IRIS
 # ---------------------------------------------------------------------------
-# A coorte e britanica: creatinina em umol/L, a unidade dos limiares IRIS abaixo.
 
 CREATININA_EM_UMOL = True
-UMOL_POR_MGDL = 88.4             # creatinina: mg/dL * 88.4 = umol/L
+UMOL_POR_MGDL = 88.4
 
-# Limiares IRIS para gatos, em umol/L (IRIS, 2026). O limite superior do
-# estagio 1 e exclusivo (140 exatos e estagio 2); os demais sao inclusivos.
-# A regra esta em modelagem.regra_iris.
+# Limiares IRIS para gatos, em umol/L (IRIS, 2026). O limite superior do estagio
+# 1 e exclusivo (140 exatos e estagio 2); os demais sao inclusivos. A regra esta
+# em modelagem.regra_iris.
 LIMIARES_IRIS_UMOL = {
-    1: (None, 140.0),            # < 140
+    1: (None, 140.0),
     2: (140.0, 250.0),
     3: (250.0, 440.0),
-    4: (440.0, None),            # > 440
+    4: (440.0, None),
 }
 
 # ---------------------------------------------------------------------------
-# Faixas fisiologicas plausiveis
+# Faixas de plausibilidade fisiologica
 # ---------------------------------------------------------------------------
-# Valor fora da faixa vira ausente, e a triagem conta quantos foram convertidos.
-# A faixa e de plausibilidade, nao de referencia clinica: deve ser larga o
-# bastante para nao descartar caso grave real. Unidades: creatinina em umol/L;
-# ureia, fosforo e potassio em mmol/L; pressao em mmHg; PCV em %.
+# Valor fora da faixa vira ausente. A faixa e de plausibilidade, nao de
+# referencia clinica: larga o bastante para nao descartar caso grave real.
+# Creatinina em umol/L; ureia, fosforo e potassio em mmol/L; pressao em mmHg.
 
 FAIXAS_PLAUSIVEIS: dict[str, tuple[float, float]] = {
     "Creatinine at diagnosis": (30.0, 3000.0),
@@ -196,12 +170,10 @@ FAIXAS_PLAUSIVEIS: dict[str, tuple[float, float]] = {
 # ---------------------------------------------------------------------------
 # Achados com qualificador temporal
 # ---------------------------------------------------------------------------
-# Varias colunas booleanas tem uma coluna companheira que registra se o achado
-# foi documentado antes, no momento ou depois do diagnostico de DRC. Usar o
-# booleano cru como preditor do estagio NO DIAGNOSTICO significa, nos casos
-# posteriores, observar o futuro. Cada par abaixo gera uma variavel derivada
-# `<nome>_pre`, verdadeira apenas quando o achado e anterior ou simultaneo ao
-# diagnostico.
+# Cada par (achado, qualificador) gera a variavel `<achado>_pre`, verdadeira so
+# quando o achado e anterior ou simultaneo ao diagnostico. O booleano cru afirma
+# que o achado existe em algum momento do historico, o que vaza informacao
+# futura; a derivada substitui o cru no conjunto de entrada.
 PARES_TEMPORAIS: list[tuple[str, str]] = [
     ("Heart Murmur", "HM first recorded"),
     ("Gallop rhythm", "GR first recorded"),
@@ -211,129 +183,30 @@ PARES_TEMPORAIS: list[tuple[str, str]] = [
     ("Arthritis", "Diagnosis.2"),
     ("Cystitis/FLUTD", "Diagnosis.3"),
 ]
-
-# Valores do qualificador aceitos como "nao posterior ao diagnostico".
 TEMPORAL_ACEITO = ["Before CKD diagnosis", "At CKD diagnosis"]
 
-# Substituir a versao crua do achado pela derivada `<nome>_pre` no conjunto de
-# entrada. True e o comportamento correto: a versao crua afirma que o achado
-# existe em algum momento do historico, o que vaza informacao futura.
-SUBSTITUIR_POR_DERIVADA = True
-
 # ---------------------------------------------------------------------------
-# Tratamento de valores ausentes
+# Tratamento de valores ausentes e conjunto do sistema
 # ---------------------------------------------------------------------------
-# A ausencia nesta coorte NAO e aleatoria: concentra-se nos casos graves (a
-# creatinina esta presente em 79% dos estagio III e em 32% dos estagio IV).
-# Imputar apaga esse sinal, porque um valor plausivel, por definicao, parece
-# normal. Tres tratamentos, comparaveis entre si:
-#
-#   "imputar"    -- imputacao multivariada (o tratamento originalmente previsto)
-#   "indicador"  -- imputacao MAIS uma coluna binaria por variavel, marcando o
-#                   que foi imputado. Preserva o sinal de ausencia sem quebrar
-#                   modelos que nao aceitam valor ausente.
-#   "nativo"     -- sem imputacao; o modelo recebe o ausente e decide sozinho.
-#                   So funciona com floresta e gradiente; a regressao logistica
-#                   nao aceita e e pulada.
+# Tres tratamentos, comparaveis entre si:
+#   "imputar"    -- imputacao multivariada;
+#   "indicador"  -- imputacao mais uma coluna binaria por variavel imputada;
+#   "nativo"     -- sem imputacao: o modelo recebe o ausente.
 TRATAMENTO_AUSENTES = "imputar"
 
-# Sentinelas textuais ("Not recorded", "Not tested", "None recorded").
-# False  -- entram como categoria propria: o modelo pode aprender que "nao
-#           testado" tem significado clinico, coerente com o tratamento nativo
-#           de ausentes adotado neste trabalho.
-# True   -- convertidas em ausente, indistinguiveis de um campo vazio.
-# Decisao explicita, nao comportamento padrao: e a mesma questao do tratamento
-# de ausentes, aplicada a ausencia registrada em texto.
-SENTINELA_COMO_AUSENTE = False
-
-# Conjunto de variaveis do sistema. Fixado por argumento conceitual e
-# arquitetural, nao por desempenho -- os candidatos empatam. O passo [6] do
-# experimento seleciona modelo e braco DENTRO deste conjunto.
+# Conjunto de variaveis do sistema: as entradas sem os indicadores de exame
+# solicitado (que descrevem conduta, nao o paciente). Fixado por argumento
+# conceitual, nao por desempenho; a selecao escolhe modelo e braco dentro dele.
 CONJUNTO_SISTEMA = "SEM_INDICADORES_EXAME"
 
-# ---------------------------------------------------------------------------
-# Escopo 3: recomendacao de exames
-# ---------------------------------------------------------------------------
-# Exames como o veterinario os PEDE: variaveis que saem da mesma coleta ficam
-# juntas. Creatinina, ureia e fosforo vem da mesma amostra de sangue; densidade
-# urinaria e fita, da mesma urinalise.
-EXAMES_RECOMENDAVEIS = {
-    "Bioquímica renal": ["Creatinine at diagnosis", "BUN at diagnosis",
-                         "Phosphorus at diagnosis"],
-    "Urinálise": ["USG at diagnosis", "Dipstick protein at diagnosis"],
-    "UPC": ["UPC at diagnosis"],
-    "Pressão arterial": ["Blood pressure at first measurement"],
-}
-
-# Piso de comparacao: ordem fixa, sempre a mesma para todo gato. Segue a logica
-# do painel minimo das diretrizes -- bioquimica e urinalise primeiro.
-ORDEM_FIXA_EXAMES = ["Bioquímica renal", "Urinálise", "Pressão arterial", "UPC"]
-
-# Penalizacao por custo, na escala 0 a 1 em cada dimensao. Os numeros sao
-# ILUSTRATIVOS, sem fonte de precos: servem para o mecanismo funcionar, nao para
-# sustentar conclusao. Por isso a penalizacao e analise de sensibilidade, e nao
-# entra na recomendacao principal.
-#   custo           -- preco relativo em laboratorio veterinario brasileiro
-#   invasividade    -- desconforto e risco da coleta
-#   indisponibilidade -- dificuldade de acesso (equipamento, envio a laboratorio)
-CUSTO_EXAMES = {
-    "Bioquímica renal": {"custo": 0.3, "invasividade": 0.5, "indisponibilidade": 0.0},
-    "Urinálise":        {"custo": 0.2, "invasividade": 0.5, "indisponibilidade": 0.0},
-    "UPC":              {"custo": 0.6, "invasividade": 0.5, "indisponibilidade": 0.5},
-    "Pressão arterial": {"custo": 0.3, "invasividade": 0.0, "indisponibilidade": 0.5},
-}
-PESOS_CUSTO = (1.0, 1.0, 1.0)     # alfa, beta, gama da formula da metodologia
-LAMBDA_CUSTO = 0.3                # quanto a penalidade pesa contra o ganho
-
-# Escopo 2: as quatro comorbidades com prevalencia suficiente para modelagem,
-# todas na versao anterior ou simultanea ao diagnostico (_pre). As demais tem
-# menos de 5% de prevalencia e foram declaradas inviaveis.
-COMORBIDADES_MODELAVEIS = [
-    "Periodontal disease",
-    "Hyperthyroidism",
-    "Cystitis/FLUTD",
-    "Arthritis",
-]
-
-# Configuracao do sistema entregue, definida pela validacao aninhada com criterio
-# RPS (gradiente|nenhum em 5 de 5 particoes). E ESTA configuracao que alimenta as
-# analises descritivas -- sobrevida, decisao clinica, SHAP. Sem isso, cada
-# analise leria as predicoes da configuracao que o passo [6] calhou de eleger, e
-# o texto atribuiria ao sistema numeros de outro modelo.
+# Configuracao do sistema, definida pela validacao aninhada com criterio RPS.
+# Todas as analises descritivas (decisao clinica, SHAP, fichas) leem
+# esta configuracao, e nao a que um passo de selecao elege em cada execucao.
 CONFIGURACAO_SISTEMA = {"conjunto": "SEM_INDICADORES_EXAME",
                         "modelo": "gradiente", "braco": "nenhum"}
 
-# Conjunto parcimonioso de Bradley et al. (2019): as quatro variaveis que o maior
-# estudo de predicao de DRC felina selecionou a partir de 35 candidatas, sobre
-# mais de cem mil gatos. Serve a duas perguntas: o sistema converge com aquele
-# achado numa coorte independente, e as 14 variaveis adicionais acrescentam algo?
-# A versao ESTENDIDA acrescenta as duas variaveis que o recomendador de exames
-# precisa pontuar (UPC e pressao arterial): concilia a parcimonia, recomendada
-# pela literatura de modelos preditivos clinicos, com a cobertura dos exames
-# recomendaveis. Nenhuma delas codifica conduta de clinica.
-CONJUNTO_PARCIMONIOSO_MAIS = [
-    "Creatinine at diagnosis",
-    "BUN at diagnosis",
-    "USG at diagnosis",
-    "Age",
-    "UPC at diagnosis",
-    "Blood pressure at first measurement",
-]
-
-CONJUNTO_PARCIMONIOSO = [
-    "Creatinine at diagnosis",
-    "BUN at diagnosis",
-    "USG at diagnosis",
-    "Age",
-]
-
-# ---------------------------------------------------------------------------
-# Decisoes sobre o conjunto de entrada
-# ---------------------------------------------------------------------------
-
-# Indicadores de que o exame foi solicitado. Nao sao achado clinico: codificam a
-# decisao do veterinario. Mantidos como entrada por padrao, mas isolados aqui
-# para permitir a ablacao (conjunto SEM_INDICADORES_EXAME).
+# Indicadores de que o exame foi solicitado. Mantidos em FULL e isolados aqui
+# para a ablacao que define SEM_INDICADORES_EXAME.
 INDICADORES_EXAME_REALIZADO = [
     "Biochemistry",
     "Urinalyisis",
@@ -344,79 +217,94 @@ INDICADORES_EXAME_REALIZADO = [
     "Ultrasound",
 ]
 
-# Variaveis descartadas por conteudo informativo insuficiente. Os percentuais
-# sao de conteudo real no subconjunto rotulado, descontadas as sentinelas.
+# Variaveis descartadas por conteudo informativo insuficiente no subconjunto
+# rotulado (percentual de conteudo real, descontadas as sentinelas).
 DESCARTAR_POR_BAIXO_CONTEUDO = [
-    "Previous exposure to lilies",   # 2,4% -- e ainda base do criterio de IRA
+    "Previous exposure to lilies",   # 2,4%
     "Previous AKI",                  # 3,3%
     "BCS 2 diagnosis (1-9)",         # 8,9%
     "Potassium at diagnosis",        # 9,8%
     "PCV at diagnosis",              # 10,6%
-    "Grade of heart murmur",         # 30,9% e derivada de Heart Murmur
+    "Grade of heart murmur",         # 30,9%, e derivada de Heart Murmur
 ]
 
-# Comorbidades anteriores ao diagnostico como PREDITORAS do estagio (escopo 1).
-# Nao e circular: o alvo do escopo 1 e o estagio, nao a comorbidade. False (o
-# valor usado) mantem o conjunto enxuto; True testaria a hipotese clinica de que
-# o hipertireoidismo altera a creatinina por perda de massa muscular.
-COMORBIDADES_PRE_COMO_ENTRADA = False
+# As quatro variaveis de Bradley et al. (2019), destacadas na figura do SHAP
+# (convergencia com a literatura; nao formam um conjunto de variaveis do sistema).
+VARIAVEIS_BRADLEY = [
+    "Creatinine at diagnosis",
+    "BUN at diagnosis",
+    "USG at diagnosis",
+    "Age",
+]
 
 # ---------------------------------------------------------------------------
-# Criterios de inclusao e exclusao
+# Criterios de inclusao e desenho de validacao
 # ---------------------------------------------------------------------------
 
-EXIGIR_IRIS = True               # manter apenas registros com estagio atribuido
-EXIGIR_CREATININA = False        # aplicar como criterio separado, para medir o custo
-PROP_MINIMA_PREENCHIDA = 0.50    # registro precisa de >= 50% das entradas preenchidas
+EXIGIR_IRIS = True                 # coorte do estadiamento: so registros com estagio
+PROP_MINIMA_PREENCHIDA = 0.50      # registro precisa de >= 50% das entradas preenchidas
 PROP_MAXIMA_AUSENTE_COLUNA = 0.70  # coluna acima disso entra na lista de revisao
-
-# ---------------------------------------------------------------------------
-# Desenho de validacao (usado apenas para a aritmetica de viabilidade)
-# ---------------------------------------------------------------------------
 
 N_FOLDS = 5
 N_REPETICOES = 3
-FRACAO_HOLDOUT = 0.20
-MIN_TESTE_POR_CLASSE = 3         # abaixo disso, holdout independente e inviavel
 
-# ---------------------------------------------------------------------------
-# Vocabulario de papeis do dicionario de variaveis
-# ---------------------------------------------------------------------------
-
+# Papeis aceitos na coluna `papel` do dicionario de variaveis.
 PAPEIS_VALIDOS = {
     "id",                  # identificador, nunca entra no modelo
     "entrada",             # candidata a variavel de entrada
     "alvo_iris",           # estagio IRIS
-    "alvo_comorbidade",    # indicador binario de comorbidade (alvo do escopo 2)
+    "alvo_comorbidade",    # indicador binario de comorbidade
     "desfecho",            # sobrevida, obito, causa
     "terapia",             # tratamento instituido apos o diagnostico
     "derivada",            # calculada a partir de outra coluna
     "excluir",             # vazamento estrutural, texto livre, coluna vazia
 }
-
 PAPEIS_FORA_DO_MODELO = {"id", "desfecho", "terapia", "derivada", "excluir"}
 
+# ---------------------------------------------------------------------------
+# Componente de recomendacao
+# ---------------------------------------------------------------------------
+
+# Comorbidades com prevalencia suficiente para modelagem, na versao `_pre`.
+COMORBIDADES_MODELAVEIS = [
+    "Periodontal disease",
+    "Hyperthyroidism",
+    "Cystitis/FLUTD",
+    "Arthritis",
+]
+
+# Exames como o veterinario os pede: variaveis da mesma coleta ficam juntas.
+EXAMES_RECOMENDAVEIS = {
+    "Bioquímica renal": ["Creatinine at diagnosis", "BUN at diagnosis",
+                         "Phosphorus at diagnosis"],
+    "Urinálise": ["USG at diagnosis", "Dipstick protein at diagnosis"],
+    "UPC": ["UPC at diagnosis"],
+    "Pressão arterial": ["Blood pressure at first measurement"],
+}
+
+# Comparador fixo: a mesma ordem para todo gato, derivada do painel minimo do
+# consenso ISFM (bioquimica e urinalise primeiro).
+ORDEM_FIXA_EXAMES = ["Bioquímica renal", "Urinálise", "Pressão arterial", "UPC"]
+
+# Penalizacao por custo, invasividade e acesso (escala 0 a 1). Valores
+# ILUSTRATIVOS, sem fonte de precos: a penalizacao e analise de sensibilidade e
+# nao entra na recomendacao principal.
+CUSTO_EXAMES = {
+    "Bioquímica renal": {"custo": 0.3, "invasividade": 0.5, "indisponibilidade": 0.0},
+    "Urinálise":        {"custo": 0.2, "invasividade": 0.5, "indisponibilidade": 0.0},
+    "UPC":              {"custo": 0.6, "invasividade": 0.5, "indisponibilidade": 0.5},
+    "Pressão arterial": {"custo": 0.3, "invasividade": 0.0, "indisponibilidade": 0.5},
+}
+PESOS_CUSTO = (1.0, 1.0, 1.0)     # alfa, beta, gama
+LAMBDA_CUSTO = 0.3                # peso da penalidade contra o ganho
 
 # ---------------------------------------------------------------------------
 # Camada interpretativa
 # ---------------------------------------------------------------------------
-# Versao FIXA do modelo durante todo o desenvolvimento e a avaliacao final, como
-# preve a metodologia. Escolhida antes de qualquer texto gerado:
-#   - sucessor do gpt-4o-mini citado na proposta do trabalho, treinado com
-#     foco em seguir instrucoes, a propriedade que a verificacao de
-#     fidelidade mede;
-#   - aceita temperatura 0 e semente, como a metodologia promete (os modelos
-#     de raciocinio mais novos nao aceitam);
-#   - tem versao com data, o que permite declarar exatamente qual modelo gerou
-#     os textos.
-# A chamada usa o nome curto porque o projeto da OpenAI recusava o nome com data,
-# embora ele constasse dos modelos permitidos. Na execucao final, o nome curto
-# serviu exatamente a versao declarada. O codigo confere, em cada chamada, a
-# versao que a OpenAI serviu, e PARA se ela for outra: se o nome curto for
-# apontado para uma versao nova, nenhum texto e gerado com modelo diferente do
-# declarado. Conferir com: python verificar.py --api
-MODELO_LLM = "gpt-4.1-mini"                   # nome usado na chamada
-VERSAO_LLM = "gpt-4.1-mini-2025-04-14"        # versao declarada no texto
+# Modelo de linguagem com versao fixa durante o desenvolvimento e a avaliacao.
+# A chamada usa o nome curto; o codigo confere, em cada chamada, a versao que a
+# OpenAI serviu e interrompe a execucao se for outra (python verificar.py --api).
+MODELO_LLM = "gpt-4.1-mini"
+VERSAO_LLM = "gpt-4.1-mini-2025-04-14"
 PRECO_LLM = (0.40, 1.60)          # US$ por milhao de tokens (entrada, saida)
-MODELO_EMBEDDINGS = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-K_TRECHOS = 5                     # trechos recuperados por consulta (metodologia: 3 a 5)
+K_TRECHOS = 5                     # trechos recuperados por gato

@@ -1,40 +1,17 @@
 """
-Escopo 3: recomendacao priorizada de exames complementares.
+Componente de recomendacao, saida 2: exames complementares por reducao
+esperada de entropia.
 
-Para um gato com exames faltando, qual exame pedir primeiro? O que mais
-esclareceria o estagio.
-
-MECANISMO -- reducao esperada de entropia.
-  A entropia mede a duvida do modelo: maxima quando ele divide a probabilidade
-  igualmente entre os quatro estagios, zero quando tem certeza de um. Para cada
-  exame faltante, o sistema pergunta: se eu tivesse o resultado, quanto a
-  duvida cairia?
-  Como o resultado ainda nao existe, ele e ESPERADO: o sistema simula valores
-  plausiveis do exame, tirados de gatos reais de cada estagio no treino, e
-  pondera pela probabilidade que o proprio modelo atribui a cada estagio.
-  Decisao de desenho: considera-se apenas a duvida sobre o ESTAGIO, e nao sobre
-  as comorbidades, porque os exames candidatos sao renais e pouco informam sobre elas.
-
-AVALIACAO -- simulacao retrospectiva por mascaramento.
-  Nos gatos que tem dois ou mais exames, todos sao escondidos; a estrategia
-  escolhe a ordem de revelacao; revela-se o valor REAL; mede-se a duvida e o
-  acerto a cada passo. Comparam-se:
-    recomendador -- a ordem pela reducao esperada de entropia, em TURNO UNICO
-                    (lista produzida uma vez, como previsto na metodologia)
-    com custo    -- a mesma, penalizada por custo, invasividade e acesso
-    ordem fixa   -- sempre a mesma sequencia (bioquimica, urinalise, pressao, UPC)
-    aleatoria    -- media exata sobre todas as ordens possiveis
-    oraculo      -- a melhor ordem em retrospecto: o teto possivel
-
-  Todos os modelos sao ajustados na particao de treino e aplicados a gatos da
-  particao de teste. As estrategias sao comparadas PAREADAS, no mesmo gato.
-
-LIMITACAO DE DESENHO:
-  O modelo aprendeu que exame ausente significa, em parte, gravidade -- porque
-  nos dados, faltar creatinina era "nunca foi pedida", muitas vezes porque o gato
-  morreu antes. Na simulacao, faltar e "ainda nao foi pedida". O modelo le as duas
-  coisas do mesmo jeito. Isso afeta os valores ABSOLUTOS de duvida, mas nao a
-  comparacao entre estrategias, que enfrentam o mesmo vies.
+Para cada exame faltante, simula resultados plausiveis (valores reais de gatos
+do treino, por estagio), reaplica o modelo de estadiamento e pondera pela
+probabilidade de cada estagio: o ganho e quanto a duvida sobre o estagio
+cairia. Avaliacao por mascaramento retrospectivo nos gatos com dois ou mais
+exames: recomendador em turno unico, com custo, ordem fixa, aleatoria (media
+exata das permutacoes) e oraculo, comparados pareados no mesmo gato, a partir
+do zero e de estados parciais; mais a recomendacao para o estado real de cada
+gato. Limitacao: nos dados, exame ausente carrega gravidade; na simulacao, e
+"ainda nao pedido"; isso afeta os valores absolutos, nao a comparacao entre
+estrategias.
 
 Uso:
     python escopo3_recomendador.py
@@ -42,7 +19,6 @@ Uso:
 
 from __future__ import annotations
 
-import argparse
 import itertools
 import json
 import warnings
@@ -52,13 +28,14 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import RepeatedStratifiedKFold
 
-import avaliacao as av
 import config as cfg
 import modelagem as mdl
 
 warnings.filterwarnings("ignore", message=".*Early stopping criterion not reached.*")
 SAIDA = cfg.SAIDA_RELATORIOS / "escopo3"
 CLASSES = [1, 2, 3, 4]
+AMOSTRAS = 15          # valores simulados por exame e estagio
+REPETICOES = 1         # repeticoes da validacao cruzada da simulacao
 
 
 # ---------------------------------------------------------------------------
@@ -189,10 +166,6 @@ def trajetoria(rec, x_real, y, ordem, exames) -> list[dict]:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Escopo 3: recomendacao de exames.")
-    ap.add_argument("--repeticoes", type=int, default=1)
-    ap.add_argument("--amostras", type=int, default=15)
-    args = ap.parse_args()
     SAIDA.mkdir(parents=True, exist_ok=True)
     exames = cfg.EXAMES_RECOMENDAVEIS
 
@@ -209,18 +182,18 @@ def main() -> None:
     print(f"  gatos avaliaveis (2+ exames): {int(aval.sum())} de {len(df)} | "
           f"com os 4: {int((tem.sum(axis=1) == 4).sum())}")
 
-    cv = RepeatedStratifiedKFold(n_splits=cfg.N_FOLDS, n_repeats=args.repeticoes,
+    cv = RepeatedStratifiedKFold(n_splits=cfg.N_FOLDS, n_repeats=REPETICOES,
                                  random_state=cfg.SEMENTE)
     fixa = list(cfg.ORDEM_FIXA_EXAMES)
     linhas, primeiras, recs_reais, parciais = [], [], [], []
 
-    print(f"\n[2] simulacao em {cfg.N_FOLDS * args.repeticoes} particoes")
+    print(f"\n[2] simulacao em {cfg.N_FOLDS * REPETICOES} particoes")
     for i, (tr, te) in enumerate(cv.split(df, y), 1):
         est = mdl.estimadores(cs["braco"])[cs["modelo"]]
-        pipe = mdl.construir_pipeline(est, num, cat, cs["braco"], y.iloc[tr], "nativo")
+        pipe = mdl.construir_pipeline(est, num, cat, cs["braco"], "nativo")
         pipe.fit(df.iloc[tr][colunas], y.iloc[tr])
         rec = Recomendador(pipe, colunas, df.iloc[tr][colunas], y.iloc[tr], exames,
-                           args.amostras, semente=i)
+                           AMOSTRAS, semente=i)
 
         for idx in df.index[te]:
             x_real = df.loc[idx, colunas]
@@ -241,9 +214,8 @@ def main() -> None:
             if not aval[idx]:
                 continue
             yi = int(y[idx])
-            # TURNO UNICO, como na metodologia: a lista e produzida uma vez, a
-            # partir do estado inicial, e seguida. Nao se recalcula a cada exame
-            # revelado -- isso usaria valores reais que a lista nao conhece.
+            # Turno unico: a lista e produzida uma vez, a partir do estado
+            # inicial, e seguida sem recalculo.
             x_zero = mascarar(x_real, exames, set())
             g0 = rec.ganho_esperado(x_zero, disp)
             estrategias = {
@@ -265,11 +237,8 @@ def main() -> None:
                 for p in t:
                     linhas.append({"particao": i, "indice": idx, "estagio": yi,
                                    "n_exames": len(disp), "estrategia": nome, **p})
-            # --- partida PARCIAL: o veterinario ja tem alguns exames ---
-            # Partir do zero favorece a coincidencia com a ordem fixa (a
-            # bioquimica e sempre a melhor primeira escolha). O teste justo da
-            # adaptacao do recomendador e partir de subconjuntos ja conhecidos
-            # e perguntar qual o PROXIMO, com ao menos duas opcoes restantes.
+            # Partida parcial: alguns exames ja conhecidos; qual o proximo, com
+            # ao menos duas opcoes restantes?
             for tam in range(1, len(disp) - 1):
                 for conhecidos in itertools.combinations(disp, tam):
                     resto = [e for e in disp if e not in conhecidos]
@@ -401,14 +370,11 @@ def main() -> None:
         "executado_em": datetime.now().isoformat(timespec="seconds"),
         "sistema": cs, "exames": exames, "ordem_fixa": fixa,
         "custos": cfg.CUSTO_EXAMES, "pesos_custo": cfg.PESOS_CUSTO,
-        "lambda_custo": cfg.LAMBDA_CUSTO, "amostras": args.amostras,
-        "particoes": cfg.N_FOLDS * args.repeticoes,
+        "lambda_custo": cfg.LAMBDA_CUSTO, "amostras": AMOSTRAS,
+        "particoes": cfg.N_FOLDS * REPETICOES,
         "avaliaveis": int(aval.sum()),
     }, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\nsaidas em {SAIDA}")
-    print("\nLIMITACAO: o modelo le exame ausente como sinal de gravidade. Na")
-    print("simulacao, ausente e 'ainda nao pedido'. Afeta valores absolutos de")
-    print("duvida, nao a comparacao entre estrategias.")
 
 
 if __name__ == "__main__":

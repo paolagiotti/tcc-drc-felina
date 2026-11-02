@@ -1,9 +1,8 @@
 """Configuracao comum dos testes.
 
 Os scripts ficam na raiz do projeto e se importam pelo nome (import config),
-entao a raiz entra no caminho de busca. Nenhum teste le o arquivo de origem,
-chama a API da OpenAI ou carrega o modelo de embeddings: tudo roda sobre dados
-sinteticos pequenos.
+entao a raiz entra no caminho de busca. Nenhum teste le o arquivo de origem ou
+chama a API da OpenAI: tudo roda sobre dados sinteticos pequenos.
 """
 import sys
 from pathlib import Path

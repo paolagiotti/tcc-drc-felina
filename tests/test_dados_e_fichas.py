@@ -90,7 +90,7 @@ def test_valor_da_variavel_em_portugues():
 
 def test_nomes_em_portugues_cobrem_as_variaveis_do_sistema():
     from figuras import NOMES_PT
-    for v in cfg.CONJUNTO_PARCIMONIOSO_MAIS:
+    for v in cfg.VARIAVEIS_BRADLEY:            # destacadas na figura do SHAP
         assert v in NOMES_PT, v
     assert set(fp.COMORB_PT) == set(cfg.COMORBIDADES_MODELAVEIS)
     for e, variaveis in cfg.EXAMES_RECOMENDAVEIS.items():

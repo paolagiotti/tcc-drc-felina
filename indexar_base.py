@@ -1,51 +1,20 @@
 """
-Indexacao da base de conhecimento da camada interpretativa (RAG).
+Base de conhecimento da camada interpretativa.
 
-Le os PDFs selecionados pela autora e pela orientadora, divide o texto em
-trechos, representa cada trecho por vetores de um modelo multilingue de sentence
-embeddings e grava um indice vetorial FAISS. Implementacao direta, sem frameworks,
-para que cada etapa fique explicita.
-
-ONDE COLOCAR OS PDFs:  <pasta do projeto>/base_conhecimento/
-Os PDFs NAO vao para o repositorio publico: o indice e construido localmente.
-
-EXTRACAO (revista depois da conferencia manual dos trechos da primeira versao):
-  - ordem de leitura: a do proprio arquivo. A ordenacao geometrica usada antes
-    (sort=True) intercalava linhas das duas colunas dos artigos;
-  - descartados: texto girado (marcas d'agua), blocos curtos repetidos em muitas
-    paginas (cabecalhos e rodapes), blocos so com numeros (eixos de graficos) e
-    trechos de sumario;
-  - monografias: indexadas a partir do primeiro capitulo tecnico (INICIO_TEXTO);
-  - todos os documentos: indexados ate o titulo da lista de referencias,
-    exclusive -- a lista e os anexos que a seguem ficam fora. Referencias sao
-    titulos de artigos: parecem pertinentes a qualquer consulta e "sustentariam"
-    qualquer item na verificacao lexical, sem afirmar nada;
-  - siglas corrompidas pela fonte de um dos PDFs (CKd, iRiS) restauradas.
-  O que foi descartado, por documento, fica registrado em meta.json.
-
-DIVISAO EM TRECHOS. A metodologia preve divisao por secao. Deteccao de secao em
-PDF generico nao e confiavel, entao os blocos de texto sao agrupados ate cerca de
-1.000 caracteres, sem cruzar blocos que parecem titulo. Cada trecho guarda o
-documento e a pagina de origem, para a citacao.
-
-JANELA DO MODELO DE EMBEDDINGS. O modelo le no maximo 128 tokens
-(max_seq_length); o que passa disso e cortado sem aviso. Um trecho de 1.000
-caracteres tem cerca do dobro. Por isso cada trecho e representado por JANELAS
-DESLIZANTES de frases inteiras: a partir de cada frase, a maior sequencia que cabe
-nesse limite, medida com o proprio tokenizador do modelo. Janelas contidas na
-anterior sao descartadas, o que evita janelas curtas no fim do trecho -- uma
-frase generica sozinha ("A doenca renal cronica e uma condicao comum") casava com
-qualquer consulta. A similaridade de um trecho com a consulta e a maior entre as
-de suas janelas. O modelo de linguagem continua recebendo o trecho inteiro.
+Extrai o texto dos PDFs de base_conhecimento/ (na ordem do arquivo; fora
+ficam texto girado, cabecalhos e rodapes repetidos, blocos so numericos,
+entradas de sumario, os pre-textuais das monografias e tudo a partir da lista
+de referencias), divide em trechos de cerca de 1.000 caracteres sem cruzar
+titulos e grava os trechos e, em meta.json, o que foi descartado de cada
+documento. A busca e por palavras (TF-IDF): a matriz e montada dos trechos
+toda vez que a camada carrega a base (`vetorizar_tfidf`), sem indice gravado.
 
 Uso:
     python indexar_base.py
-    python indexar_base.py --recuperador tfidf   # SO PARA TESTE; ver abaixo
 """
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import re
@@ -62,9 +31,7 @@ SAIDA = cfg.SAIDA / "base"
 TAM_TRECHO = 1000
 MIN_TRECHO = 200
 
-# Monografias: pagina do PDF (a primeira e 1) em que comeca o texto tecnico. Antes
-# dela: capa, ficha catalografica, agradecimentos, epigrafe, resumos, listas e
-# sumario. Conferido pagina a pagina.
+# Monografias: pagina do PDF (a primeira e 1) em que comeca o texto tecnico.
 INICIO_TEXTO = {
     "carvalho2024": 7,    # "1 Introducao"
     "pessoa2025": 18,     # "2. O Rim e a DRC"; o cap. 1 e o relatorio de estagio
@@ -89,10 +56,8 @@ _RE_ENTRADA_SUMARIO = re.compile(r"[A-Za-zÀ-ÿ)]\s+\d{1,3}\s*(?:[<–—]|$)")
 _RE_PONTILHADO = re.compile(r"\.{5,}|…{2,}")
 _RE_FRASE = re.compile(r"(?<=[.!?;])\s+")
 
-# Palavras vazias (artigos, preposicoes, conjuncoes...) da busca lexical: as
-# listas do projeto Snowball para portugues e ingles, na integra
-# (snowballstem.org; algorithms/portuguese/stop.txt e english/stop.txt).
-# Sem elas, "ou" ou "the" contavam como palavra em comum com a consulta.
+# Palavras vazias da busca lexical: as listas Snowball para portugues e ingles
+# (snowballstem.org), na integra.
 _VAZIAS_PT = """
     de a o que e do da em um para com não uma os no se na por mais as dos
     como mas ao ele das à seu sua ou quando muito nos já eu também só pelo
@@ -137,7 +102,12 @@ def normalizar(t: str) -> str:
     return "".join(c for c in t if not unicodedata.combining(c))
 
 
-PALAVRAS_VAZIAS = sorted({normalizar(w) for w in (_VAZIAS_PT + _VAZIAS_EN).split()})
+# As palavras vazias passam pelo mesmo corte em palavras da busca (o padrao do
+# TfidfVectorizer: duas letras ou mais): "can't" vira "can", "you're" vira "you" e
+# "re". Assim a lista vale para o que a busca de fato compara.
+_RE_PALAVRA = re.compile(r"(?u)\b\w\w+\b")
+PALAVRAS_VAZIAS = sorted({p for w in (_VAZIAS_PT + _VAZIAS_EN).split()
+                          for p in _RE_PALAVRA.findall(normalizar(w))})
 
 
 def _parece_titulo(linha: str) -> bool:
@@ -182,27 +152,6 @@ def dividir(txt: str, cabe) -> list[str]:
     for frase in _RE_FRASE.split(txt):
         pecas.extend([frase] if cabe(frase) else _empacotar(frase.split(), cabe))
     return _empacotar(pecas, cabe)
-
-
-def deslizantes(txt: str, cabe) -> list[str]:
-    """Janelas deslizantes de frases: a partir de cada frase, a maior sequencia
-    que cabe. A janela contida na anterior (mesmo fim) e descartada; toda frase
-    fica em ao menos uma janela."""
-    frases = []
-    for f in _RE_FRASE.split(txt):
-        frases.extend([f] if cabe(f) else _empacotar(f.split(), cabe))
-    out, fim_anterior = [], -1
-    for i in range(len(frases)):
-        janela, j = frases[i], i
-        while j + 1 < len(frases) and cabe(f"{janela} {frases[j + 1]}"):
-            j += 1
-            janela = f"{janela} {frases[j]}"
-        if j > fim_anterior:
-            out.append(janela)
-            fim_anterior = j
-        if j == len(frases) - 1:
-            break
-    return out
 
 
 def _blocos(pdf: Path) -> list[tuple[int, list[str]]]:
@@ -298,47 +247,10 @@ def extrair(pdf: Path) -> tuple[list[dict], dict]:
     return trechos, reg
 
 
-def carregar_modelo(nome: str | None = None):
-    """Modelo de sentence embeddings (config.MODELO_EMBEDDINGS)."""
-    from sentence_transformers import SentenceTransformer
-    return SentenceTransformer(nome or cfg.MODELO_EMBEDDINGS)
-
-
-def contador_tokens(modelo):
-    """Tokens que o modelo de embeddings le, com os especiais de inicio e fim.
-
-    So conta: medir candidatos acima do limite faz parte da divisao, e nenhum texto
-    acima dele vai para o modelo (janelas() confere). Por isso verbose=False, que
-    cala o aviso do tokenizador sobre sequencias longas."""
-    tok = modelo.tokenizer
-    return lambda s: len(tok(s, add_special_tokens=True, verbose=False)["input_ids"])
-
-
-def janelas(trechos: list[dict], modelo=None) -> list[dict]:
-    """Janelas de cada trecho. Sem modelo (TF-IDF, so teste): o trecho inteiro."""
-    if modelo is None:
-        return [{"trecho": t["id"], "texto": t["texto"], "tokens": None}
-                for t in trechos]
-    n_tokens, limite = contador_tokens(modelo), modelo.max_seq_length
-    out = []
-    for t in trechos:
-        for j in deslizantes(t["texto"], lambda s: n_tokens(s) <= limite):
-            out.append({"trecho": t["id"], "texto": j, "tokens": n_tokens(j)})
-    excedentes = [j for j in out if j["tokens"] > limite]
-    if excedentes:                       # nunca truncar em silencio
-        j = excedentes[0]
-        raise SystemExit(f"{len(excedentes)} janela(s) acima de {limite} tokens "
-                         f"(trecho {j['trecho']}: {j['texto'][:80]!r}). Verifique "
-                         f"o texto extraido desse documento.")
-    return out
-
-
-def vetorizar(textos: list[str], recuperador: str, modelo=None):
-    """Vetores normalizados dos textos: embeddings (metodologia) ou TF-IDF (teste e busca lexical)."""
-    if recuperador == "embeddings":
-        modelo = modelo or carregar_modelo()
-        return modelo.encode(textos, normalize_embeddings=True, batch_size=32,
-                             show_progress_bar=True).astype("float32"), None
+def vetorizar_tfidf(textos: list[str]):
+    """Vetores TF-IDF normalizados dos textos e o vetorizador ajustado: a busca
+    da contextualizacao. Cada palavra pesa pela frequencia no trecho e pela
+    raridade na base; as palavras vazias nao contam."""
     from sklearn.feature_extraction.text import TfidfVectorizer
     vec = TfidfVectorizer(preprocessor=normalizar, sublinear_tf=True,
                           stop_words=PALAVRAS_VAZIAS)
@@ -348,15 +260,6 @@ def vetorizar(textos: list[str], recuperador: str, modelo=None):
 
 
 def main() -> None:
-    import faiss
-
-    ap = argparse.ArgumentParser(description="Indexa a base de conhecimento.")
-    ap.add_argument("--recuperador", choices=["embeddings", "tfidf"],
-                    default="embeddings",
-                    help="embeddings (padrao, o da metodologia) ou tfidf, "
-                         "apenas para teste em ambiente sem o modelo")
-    args = ap.parse_args()
-
     pdfs = sorted(PASTA_PDF.glob("*.pdf"))
     if not pdfs:
         raise SystemExit(f"Nenhum PDF em {PASTA_PDF}. Crie a pasta e coloque os "
@@ -377,52 +280,25 @@ def main() -> None:
     for i, t in enumerate(trechos):
         t["id"] = i
 
-    if args.recuperador != "embeddings":
-        print("\n  ATENCAO: recuperador TF-IDF, busca lexical, SO PARA TESTE. Nao e o")
-        print("  metodo da metodologia e nao deve gerar os resultados do trabalho.\n")
-        modelo = None
-    else:
-        modelo = carregar_modelo()
-    jan = janelas(trechos, modelo)
-    print(f"[2] vetorizando {len(jan)} janelas de {len(trechos)} trechos "
-          f"({args.recuperador})")
-    m, _ = vetorizar([j["texto"] for j in jan], args.recuperador, modelo)
-
-    indice = faiss.IndexFlatIP(m.shape[1])     # produto interno de vetores
-    indice.add(m)                              # normalizados = cosseno
-    faiss.write_index(indice, str(SAIDA / "indice.faiss"))
     with open(SAIDA / "trechos.jsonl", "w", encoding="utf-8") as fh:
         for t in trechos:
             fh.write(json.dumps(t, ensure_ascii=False) + "\n")
-    with open(SAIDA / "janelas.jsonl", "w", encoding="utf-8") as fh:
-        for j in jan:
-            fh.write(json.dumps(j, ensure_ascii=False) + "\n")
+    # confere que a busca por palavras se monta sobre estes trechos
+    _, vec = vetorizar_tfidf([t["texto"] for t in trechos])
 
     tam = [len(t["texto"]) for t in trechos]
-    por_trecho = Counter(j["trecho"] for j in jan)
-    tokens = [j["tokens"] for j in jan if j["tokens"] is not None]
     hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()[:16] for p in pdfs}
     (SAIDA / "meta.json").write_text(json.dumps({
-        "recuperador": args.recuperador,
-        "modelo_embeddings": cfg.MODELO_EMBEDDINGS if modelo else None,
-        "limite_tokens": modelo.max_seq_length if modelo else None,
-        "n_trechos": len(trechos), "n_janelas": len(jan),
-        "janelas_por_trecho": {"mediana": float(np.median(list(por_trecho.values()))),
-                               "maximo": max(por_trecho.values())},
-        "tokens_por_janela": ({"mediana": float(np.median(tokens)), "maximo": max(tokens)}
-                              if tokens else None),
+        "recuperador": "tfidf",
+        "n_trechos": len(trechos), "n_termos": len(vec.vocabulary_),
         "caracteres_por_trecho": {"mediana": float(np.median(tam)),
                                   "minimo": min(tam), "maximo": max(tam)},
         "tam_trecho": TAM_TRECHO, "documentos": hashes, "extracao": registro,
     }, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    print(f"[3] indice gravado em {SAIDA}")
+    print(f"[2] base gravada em {SAIDA}")
     print(f"    trechos: {len(trechos)} | tamanho mediano {int(np.median(tam))} "
-          f"caracteres [{min(tam)}-{max(tam)}]")
-    if tokens:
-        print(f"    janelas: {len(jan)} | ate {max(tokens)} tokens cada (limite do "
-              f"modelo: {modelo.max_seq_length}) | mediana de "
-              f"{np.median(list(por_trecho.values())):.0f} por trecho")
+          f"caracteres [{min(tam)}-{max(tam)}] | {len(vec.vocabulary_)} termos na busca")
     print("    O que foi descartado de cada documento esta em meta.json.")
 
 

@@ -119,7 +119,7 @@ def test_avaliar_roda_validacao_cruzada_com_pipeline_simples():
     y = pd.Series([1] * 20 + [2] * 20 + [3] * 10 + [4] * 10)
     av.definir_classes(y)
     splits = av.materializar_splits(X, y, n_splits=5, n_repeats=2)
-    por_fold, oof = av.avaliar(lambda y_tr: DummyClassifier(strategy="prior"), X, y, splits)
+    por_fold, oof = av.avaliar(lambda: DummyClassifier(strategy="prior"), X, y, splits)
     assert len(por_fold) == 10
     assert set(por_fold.repeticao) == {0, 1}
     assert oof.shape == (60, 2) and not oof.isna().any().any()

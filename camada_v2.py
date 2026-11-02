@@ -24,19 +24,11 @@ O QUE MUDA, com o desenho fixado antes de qualquer texto da v2 ser gerado:
   2. Prompt novo. O resto nao muda: mesmas fichas, mesmo modelo e parametros. O
      RAG e o modelo puro da execucao final sao reaproveitados, sem nova chamada.
   3. Verificacao ampliada, aplicada as DUAS versoes com as mesmas regras.
-  4. Leitura comparada: os 10 gatos da leitura qualitativa, com as duas versoes
-     lado a lado, em ordem sorteada; a chave fica em arquivo separado.
 
 A versao 1 continua reportada; a 2 e uma segunda iteracao, declarada como tal.
-
-Um piloto com cinco gatos, fora da amostra da leitura, apontou tres defeitos,
-corrigidos antes da execucao completa: a verificacao nao reconhecia "o estagio
-estimado e IRIS 3" como mencao ao estagio; com "creatinina_medida": "sim" no
-resumo, o modelo afirmou que a estimativa era "mais segura"; e o texto agrupou
-duas comorbidades sob um termo que so servia a uma ("muito provaveis sao ...
-(66,8%)"). Desde entao a mencao "IRIS 3" conta, os indicadores so vao ao modelo
-quando pedem uma frase (para_modelo), a regra 6 proibe agrupar e a verificacao
-le o termo no plural. Os nomes dos exames vao em minusculas no resumo.
+Um piloto com cinco gatos apontou tres defeitos, corrigidos antes da execucao
+completa (a mencao "IRIS 3" nao contava como estagio; os indicadores do resumo
+induziam frases sem base; o termo da escala era aplicado a uma lista).
 
 Entrada: fichas e respostas da v1 da execucao final mais recente
 (entregas/rodada_final_*/relatorios/camada/), nunca de saida/.
@@ -44,7 +36,7 @@ Entrada: fichas e respostas da v1 da execucao final mais recente
 Uso:
     python camada_v2.py --simular   # sem API: grava resumos e prompts, e aplica a
                                     # verificacao nova aos textos da v1
-    python camada_v2.py --piloto    # 5 gatos fora da amostra da leitura, com API
+    python camada_v2.py --piloto    # 5 gatos, com API
     python camada_v2.py             # os 123; pela rodada: bash rodada_camada_v2.sh
 """
 
@@ -53,7 +45,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import random
 import re
 from datetime import datetime
 from pathlib import Path
@@ -61,8 +52,7 @@ from pathlib import Path
 import pandas as pd
 
 import config as cfg
-from camada_interpretativa import (LLM, ROMANOS, _RE_GRAVIDADE,
-                                   selecionar_qualitativos, versao_declarada)
+from camada_interpretativa import LLM, ROMANOS, _RE_GRAVIDADE, versao_declarada
 from indexar_base import normalizar
 
 SAIDA = cfg.SAIDA_RELATORIOS / "camada_v2"
@@ -79,8 +69,7 @@ SAIDA = cfg.SAIDA_RELATORIOS / "camada_v2"
 LIMIAR_GANHO_BITS = 0.10
 MAX_DADOS_CLINICOS = 3          # os de maior peso, depois do filtro clinico
 LIMITE_PALAVRAS = 130           # v1: 180
-# Piloto: fora da amostra da leitura qualitativa e dos pilotos da v1; cobre os
-# quatro estagios, com e sem creatinina, e os erros vistos na v1.
+# Piloto: cinco gatos que cobrem os quatro estagios, com e sem creatinina.
 PILOTO = [192, 326, 345, 206, 177]
 # A diretriz IRIS subestadia por proteinuria (UPC) e pressao arterial: esses
 # exames seguem indicados mesmo quando pouco mudam o estagio.
@@ -286,10 +275,9 @@ NOME_NO_TEXTO = {"Bioquímica renal": "bioquímica renal", "Urinálise": "uriná
 
 
 def para_modelo(rs: dict) -> dict:
-    """O resumo como o modelo o recebe. Os dois indicadores so vao quando pedem
-    uma frase: no piloto, com "creatinina_medida": "sim" no resumo, o modelo
-    escreveu que a medida "torna a estimativa mais segura" -- afirmacao que o
-    resumo nao sustenta."""
+    """O resumo como o modelo o recebe: os dois indicadores so vao quando pedem
+    uma frase (com "creatinina_medida": "sim", o modelo comentava a seguranca da
+    estimativa sem base no resumo)."""
     m = {k: v for k, v in rs.items() if k not in ("creatinina_medida", "falta_de_exames_pesou",
                                                   "exames_recomendados",
                                                   "exames_para_subestadiamento", "comorbidades")}
@@ -594,16 +582,6 @@ def _texto_v1(r: dict) -> str | None:
     return None if "_erro" in t else t.get("texto", "")
 
 
-def _rag_md(r: dict) -> list[str]:
-    """Itens da contextualizacao em Markdown, com a marca da verificacao."""
-    linhas = []
-    for it in r["rag"].get("itens", []):
-        ok = "✓" if it.get("_sustentado") else ("~" if it.get("_citacao_valida") else "✗")
-        linhas.append(f"- {ok} **{it.get('condicao')}** "
-                      f"({', '.join(it.get('trechos', []))}) — {it.get('justificativa')}")
-    return linhas
-
-
 def gravar_textos(destino: Path, fichas: list[dict], v1: dict, v2: dict | None,
                   resumos: dict, med1: dict, med2: dict | None) -> None:
     """Leitura corrida: resumo, texto v1, texto v2 e o que a verificacao acusou."""
@@ -632,47 +610,6 @@ def gravar_textos(destino: Path, fichas: list[dict], v1: dict, v2: dict | None,
     (destino / "textos.md").write_text("\n".join(ln), encoding="utf-8")
 
 
-def gravar_leitura_comparada(destino: Path, fichas: list[dict], v1: dict, v2: dict) -> dict:
-    """Os 10 gatos da leitura qualitativa, com as duas versoes em ordem sorteada."""
-    amostra = selecionar_qualitativos(fichas)
-    rng = random.Random(cfg.SEMENTE)
-    chave = {}
-    ln = ["# Leitura comparada — camada interpretativa, versões 1 e 2\n",
-          "Os mesmos 10 gatos da leitura qualitativa. Para cada um, os textos **A** e "
-          "**B** são as duas versões da tradução, em ordem sorteada. A chave está em "
-          "`chave_leitura.json`: abra só depois de terminar.\n",
-          "Critérios: princípios de Xiao et al. (2025) e compreensibilidade (Wang et "
-          "al., 2023). Marque de 1 (não atende) a 5 (atende plenamente).\n"]
-    for f in amostra:
-        i = f["id"]
-        ordem = ["v1", "v2"]
-        rng.shuffle(ordem)
-        chave[str(i)] = {"A": ordem[0], "B": ordem[1]}
-        textos = {"v1": _texto_v1(v1[i]),
-                  "v2": None if "_erro" in v2[i]["resposta"] else v2[i]["resposta"].get("texto")}
-        ln += [f"\n---\n\n## Gato {i}\n",
-               f"*Gabarito, só para a avaliadora:* estágio registrado "
-               f"{f['_avaliacao']['estagio_registrado']}; "
-               f"{'sem' if f['_avaliacao']['sem_creatinina'] else 'com'} creatinina.\n",
-               "### Texto A\n", (textos[ordem[0]] or "(erro)") + "\n",
-               "### Texto B\n", (textos[ordem[1]] or "(erro)") + "\n",
-               "### Contextualização por literatura (RAG) — igual nas duas versões\n",
-               *_rag_md(v1[i]),
-               "\n### Avaliação\n",
-               "| Critério | A (1–5) | B (1–5) |", "|---|---|---|",
-               "| **Centralidade do profissional:** o texto se apresenta como apoio, não como veredito? | | |",
-               "| **Explicabilidade:** os fatores que motivaram o resultado estão inteligíveis? | | |",
-               "| **Transparência:** a incerteza e as limitações ficam claras? | | |",
-               "| **Compreensibilidade:** um clínico generalista entenderia sem ajuda? | | |",
-               "| **Correção clínica:** há alguma afirmação clinicamente incorreta? (anotar) | | |",
-               "| **Utilidade:** qual dos dois você levaria para a consulta? (A, B ou tanto faz) | | |",
-               "\nObservações:\n"]
-    (destino / "leitura_comparada.md").write_text("\n".join(ln), encoding="utf-8")
-    (destino / "chave_leitura.json").write_text(
-        json.dumps(chave, indent=2, ensure_ascii=False), encoding="utf-8")
-    return chave
-
-
 # ---------------------------------------------------------------------------
 
 def main() -> None:
@@ -689,9 +626,6 @@ def main() -> None:
     origem = args.origem.resolve() if args.origem else origem_padrao()
     fichas, v1 = carregar(origem)
     pasta_v1 = origem / "relatorios" / "camada"
-    amostra = [f["id"] for f in selecionar_qualitativos(fichas)]
-    if set(PILOTO) & set(amostra):
-        raise SystemExit(f"Gatos do piloto na amostra da leitura: {set(PILOTO) & set(amostra)}.")
     if not set(PILOTO) <= {f["id"] for f in fichas}:
         raise SystemExit("Gato do piloto ausente das fichas.")
 
@@ -781,10 +715,6 @@ def main() -> None:
     if llm.erros:
         print(f"    ATENCAO: {llm.erros} de {llm.chamadas} chamadas falharam.")
 
-    if not args.piloto:
-        gravar_leitura_comparada(destino, fichas, v1, v2)
-        print(f"\n[4] leitura comparada: 10 gatos em {destino / 'leitura_comparada.md'}")
-        print("    (a chave A/B esta em chave_leitura.json; nao abrir antes da leitura)")
     print(f"\nsaidas em {destino}")
     print(f"    textos lado a lado: {destino / 'textos.md'}")
 

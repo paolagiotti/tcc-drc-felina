@@ -1,6 +1,8 @@
-"""Camada interpretativa, versao 1: consultas de busca, recuperacao alternada e
-verificacao automatica da traducao. Nada aqui chama a API nem carrega o indice."""
-import numpy as np
+"""Camada interpretativa, versao 1: consultas de busca, busca por palavras,
+recuperacao alternada e verificacao automatica da traducao. Nada aqui chama a
+API nem le a base de conhecimento real."""
+import json
+
 import pytest
 
 import camada_interpretativa as ci
@@ -106,6 +108,63 @@ def test_recuperacao_com_lista_curta_completa_com_o_outro_tema():
     assert ids == [1, 2, 3, 4]
 
 
+def _base_com(textos):
+    """Base da camada sobre os trechos dados, sem arquivos: a busca e a real."""
+    from indexar_base import vetorizar_tfidf
+    base = object.__new__(ci.Base)
+    base.trechos = [{"id": i, "texto": t, "documento": "d", "pagina": 1}
+                    for i, t in enumerate(textos)]
+    base.texto_norm = [normalizar(t) for t in textos]
+    base.matriz, base.vetorizador = vetorizar_tfidf(textos)
+    return base
+
+
+@pytest.mark.filterwarnings("ignore:Your stop_words may be inconsistent")
+def test_busca_por_palavras():
+    base = _base_com(["a doença periodontal é comum em gatos com DRC",
+                      "hipertireoidismo em gatos idosos",
+                      "doença periodontal grave",
+                      "anemia na doença renal",
+                      "doença periodontal grave"])
+    r = base.buscar("Doença periodontal (periodontal disease).", 5)
+    # so trechos com alguma palavra da consulta; no empate (2 e 4), a ordem da base
+    assert [t["id"] for t in r] == [2, 4, 0, 3]
+    assert [t["posto"] for t in r] == [1, 2, 3, 4]
+    s = [t["similaridade"] for t in r]
+    assert s[0] == s[1] > s[2] > s[3] > 0
+    assert [t["id"] for t in base.buscar("Doença periodontal.", 2)] == [2, 4]
+    assert base.buscar("estágio 4", 5) == []       # o numero sozinho nao entra
+
+
+@pytest.mark.filterwarnings("ignore:Your stop_words may be inconsistent")
+def test_recuperacao_com_poucos_trechos_entrega_menos_de_k():
+    base = _base_com(["doença periodontal grave", "hipertireoidismo felino",
+                      "anemia na doença renal"])
+    temas = [("a", "Doença periodontal."), ("b", "Hipertireoidismo.")]
+    r = ci.recuperar(base, temas, 5)
+    assert [t["id"] for t in r] == [0, 1, 2]      # so tres trechos tem palavra dos temas
+    assert [t["tema"] for t in r] == ["a", "b", "a"]
+
+
+@pytest.mark.filterwarnings("ignore:Your stop_words may be inconsistent")
+def test_base_carrega_trechos_e_recusa_base_antiga(tmp_path, monkeypatch):
+    monkeypatch.setattr(ci, "BASE", tmp_path)
+    with pytest.raises(SystemExit):                # base nao preparada
+        ci.Base()
+    trechos = [{"id": 0, "texto": "doença periodontal em gatos", "documento": "d", "pagina": 1},
+               {"id": 1, "texto": "hipertireoidismo felino", "documento": "d", "pagina": 2}]
+    (tmp_path / "trechos.jsonl").write_text(
+        "\n".join(json.dumps(t, ensure_ascii=False) for t in trechos), encoding="utf-8")
+    (tmp_path / "meta.json").write_text(json.dumps({"recuperador": "embeddings"}),
+                                        encoding="utf-8")
+    with pytest.raises(SystemExit):                # preparada pela versao anterior
+        ci.Base()
+    (tmp_path / "meta.json").write_text(json.dumps({"recuperador": "tfidf"}), encoding="utf-8")
+    base = ci.Base()
+    assert len(base.trechos) == 2
+    assert [t["id"] for t in base.buscar("Hipertireoidismo.", 5)] == [1]
+
+
 # ------------------------------------------------------------- verificacao
 
 TEXTO_FIEL = (
@@ -191,18 +250,6 @@ def test_verificabilidade_no_modelo_puro():
     r = {"itens": [{"condicao": "hiperfosfatemia", "termo_en": "hyperphosphatemia"},
                    {"condicao": "gota", "termo_en": "gout"}]}
     assert ci.verificabilidade(r, base) == {"erro": False, "itens": 2, "verificavel_na_base": 1}
-
-
-def test_selecao_qualitativa_dois_por_estagio_mais_sem_creatinina():
-    fichas = []
-    for e in (1, 2, 3, 4):
-        for i in range(3):
-            fichas.append({"id": e * 10 + i,
-                           "_avaliacao": {"estagio_registrado": e, "sem_creatinina": i == 2}})
-    amostra = ci.selecionar_qualitativos(fichas)
-    assert len(amostra) == 10
-    assert [f["_avaliacao"]["estagio_registrado"] for f in amostra[:8]] == [1, 1, 2, 2, 3, 3, 4, 4]
-    assert all(f["_avaliacao"]["sem_creatinina"] for f in amostra[8:])
 
 
 def test_prompts_congelados_tem_as_regras_essenciais():

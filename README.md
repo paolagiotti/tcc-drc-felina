@@ -41,18 +41,17 @@ arquivo de configuração. A ordem abaixo é a ordem de execução.
 | `inventario.py` | Perfila as 121 colunas do arquivo de origem e gera o rascunho do dicionário de variáveis (revisado à mão em `dados/dicionario_variaveis.csv`) | arquivo de origem |
 | `auditar_colunas.py` | Aponta sentinelas textuais, valores fora de faixa e qualificadores temporais não aproveitados; não decide nada | arquivo de origem, dicionário |
 | `triagem.py` | Aplica os critérios de inclusão e gera as duas coortes, os mapas de ausência e os conjuntos de variáveis | arquivo de origem, dicionário |
-| `modelagem.py` | Pipeline sem vazamento (imputação, codificação e balanceamento dentro de cada partição), estimadores e regra IRIS | biblioteca |
+| `modelagem.py` | Pipeline sem vazamento (imputação e codificação ajustadas dentro de cada partição), os dois estimadores (floresta aleatória e XGBoost) e a regra IRIS | biblioteca |
 | `avaliacao.py` | Partições compartilhadas, métricas (acurácia balanceada, kappa quadrático, RPS, Brier contra pisos) e comparação pareada | biblioteca |
 | `experimento_iris.py` | **Estadiamento**: pisos, modelos, tratamentos de ausentes, ablações, seleção por RPS em validação aninhada | `triagem.py` |
 | `shap_estadiamento.py` | Valores de Shapley fora da amostra, globais e por gato | `triagem.py` |
-| `sobrevida_discordancias.py` | Análise exploratória de sobrevida das discordâncias entre o modelo e a regra IRIS | `experimento_iris.py` (tratamento nativo) |
-| `escopo2_comorbidades.py` | **Recomendação, saída 1**: ranqueamento de comorbidades (formulações independente e em cadeia) | `triagem.py` |
+| `escopo2_comorbidades.py` | **Recomendação, saída 1**: ranqueamento de comorbidades (um classificador por comorbidade) | `triagem.py` |
 | `escopo3_recomendador.py` | **Recomendação, saída 2**: exames por redução esperada de entropia, com simulação retrospectiva | `triagem.py` |
 | `fichas_pacientes.py` | Ficha estruturada de cada gato, entrada da camada interpretativa | os três anteriores |
-| `indexar_base.py` | Extrai o texto dos PDFs, divide em trechos e janelas e grava o índice vetorial (FAISS) | PDFs em `base_conhecimento/` |
-| `camada_interpretativa.py` | Tradução, contextualização (RAG), comparação com o modelo sem recuperação e verificação automática | fichas, índice, chave da API |
+| `indexar_base.py` | Extrai o texto dos PDFs e divide em trechos, sobre os quais a busca por palavras (TF-IDF) é montada | PDFs em `base_conhecimento/` |
+| `camada_interpretativa.py` | Tradução, contextualização (RAG), comparação com o modelo sem recuperação e verificação automática | fichas, trechos da base, chave da API |
 | `camada_v2.py` | Segunda iteração da tradução: o código prepara um resumo clínico da ficha, o modelo redige, e a verificação é aplicada às duas versões | fichas e respostas da execução final, chave da API |
-| `figuras.py`, `figuras_extra.py` | Figuras do capítulo de resultados, geradas das saídas da execução final | experimentos |
+| `figuras.py` | As oito figuras do capítulo de resultados, geradas das saídas da execução final | experimentos |
 
 Ferramentas:
 
@@ -61,7 +60,6 @@ Ferramentas:
 | `verificar.py` | Conferência da pasta e do ambiente: manifesto, arquivos sobrando ou faltando, SHA-256 do arquivo de origem, versões das bibliotecas; `--api` testa o acesso ao modelo de linguagem |
 | `rodada_final.sh` | Execução oficial: triagem, estadiamento, recomendação, fichas, camada e figuras, gravados em `entregas/rodada_final_<data>/`. Os números do texto saem dessa pasta |
 | `rodada_camada_v2.sh` | Execução oficial da segunda iteração da tradução, gravada em `entregas/camada_v2_<data>/` |
-| `limpar.sh` | Apaga as saídas regeráveis de `saida/`; preserva as respostas pagas, os dados e as execuções finais |
 | `requirements.txt` | Versões fixadas das bibliotecas |
 | `MANIFESTO.txt` | SHA-256 de cada arquivo do projeto, conferido por `verificar.py` |
 | `tests/` | Testes automatizados (ver [Testes](#testes)) |
@@ -105,8 +103,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-O `sentence-transformers` baixa o PyTorch e só é necessário para a camada
-interpretativa; o mesmo vale para `pymupdf`, `faiss-cpu` e `openai`. A geração
+O `pymupdf` e o `openai` só são necessários para a camada interpretativa. A geração
 dos textos usa a API da OpenAI, com a chave na variável de ambiente
 `OPENAI_API_KEY` (nunca em arquivo do projeto). O modelo é fixado em
 `config.py` (`MODELO_LLM` e `VERSAO_LLM`): a cada chamada o código confere a
@@ -120,9 +117,8 @@ Tudo roda de dentro da pasta do projeto. Antes de qualquer coisa:
 python verificar.py
 ```
 
-Execução completa, de onde saem os números do texto (cerca de 40 minutos; a
-camada interpretativa só entra se houver PDFs em `base_conhecimento/` e a
-chave da API definida):
+Execução completa, de onde saem os números do texto (a camada interpretativa
+só entra se houver PDFs em `base_conhecimento/` e a chave da API definida):
 
 ```bash
 bash rodada_final.sh
@@ -133,11 +129,12 @@ Por componente, para desenvolvimento:
 | Etapa | Comando | Custo |
 |---|---|---|
 | Triagem (só quando mudam dados ou critérios) | `python triagem.py` | nenhum |
-| Estadiamento, validação aninhada | `python experimento_iris.py --ausentes nativo --modelos floresta gradiente --bracos peso nenhum --aninhada` | nenhum |
+| Estadiamento, tratamento nativo | `python experimento_iris.py --ausentes nativo` | nenhum |
+| Estadiamento, validação aninhada | `python experimento_iris.py --ausentes nativo --aninhada` | nenhum |
 | Comorbidades | `python escopo2_comorbidades.py` | nenhum |
 | Exames | `python escopo3_recomendador.py` | nenhum |
 | Fichas dos pacientes | `python fichas_pacientes.py` | nenhum |
-| Índice da base de conhecimento | `python indexar_base.py` | nenhum |
+| Trechos da base de conhecimento | `python indexar_base.py` | nenhum |
 | Camada: só os prompts, sem chamar a API | `python camada_interpretativa.py --simular` | nenhum |
 | Camada: cinco gatos | `python camada_interpretativa.py --limite 5` | cerca de 1 centavo de dólar |
 | Camada: os 123 gatos | `python camada_interpretativa.py` | cerca de US$ 0,30 |
@@ -182,13 +179,11 @@ Nenhum teste executa a cadeia completa; isso é papel de `rodada_final.sh`.
   `entregas/rodada_final_<data>/`, e os números do texto saem dessa pasta.
 - Versão do modelo de linguagem declarada e conferida em cada chamada.
 
-Os scripts foram revisados depois da execução final (comentários, docstrings e
-mensagens); a lógica não mudou. O manifesto deste repositório registra a versão
-publicada.
+Os números do texto saem da execução final feita com esta versão do código, e
+o manifesto registra essa versão.
 
 ## Licença
 
 O código está sob a licença MIT (arquivo `LICENSE`). O conjunto de dados
 (CC BY-NC-ND 4.0) e os documentos da base de conhecimento pertencem aos seus
 autores e não são redistribuídos aqui.
-

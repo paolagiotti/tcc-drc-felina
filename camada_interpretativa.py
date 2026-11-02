@@ -1,54 +1,14 @@
 """
-Camada interpretativa: traducao estruturada e contextualizacao por literatura.
+Camada interpretativa: traducao e contextualizacao por literatura.
 
-DOIS PAPEIS, como na metodologia:
-
-  1. TRADUCAO ESTRUTURADA. O modelo de linguagem recebe a ficha do gato -- saidas
-     dos tres componentes e fatores SHAP -- e escreve um texto curto para o
-     veterinario. So verbaliza: nao calcula nem altera nenhuma predicao.
-
-  2. CONTEXTUALIZACAO POR LITERATURA (RAG). Busca os trechos mais pertinentes na
-     base de conhecimento e pede de 3 a 5 complicacoes ou condicoes associadas,
-     cada uma com citacao obrigatoria do trecho que a sustenta. Item sem citacao
-     valida e suprimido.
-
-     A BUSCA e feita por TEMAS construidos a partir do perfil do paciente, como
-     preve a metodologia, e nao pelo texto do perfil inteiro: o estagio estimado,
-     cada comorbidade ao menos "possivel" e os achados clinicos presentes. Os k
-     trechos sao escolhidos alternando entre os temas, na ordem de similaridade de
-     cada um, sem repeticao. As consultas nao repetem os termos do dominio ("doenca
-     renal cronica em gatos"): a base inteira trata disso, entao esses termos nao
-     distinguem um trecho de outro e puxam a busca para os mais genericos.
-     Consultas de estagio e de comorbidade levam tambem o termo original em
-     ingles (da diretriz e do conjunto de dados): a base mistura os dois idiomas.
-
-     BUSCA HIBRIDA. Cada consulta ordena os trechos duas vezes -- pela
-     similaridade semantica (embeddings) e pela lexical (TF-IDF, palavras em
-     comum, sem as palavras vazias da lista Snowball, como "ou" e "the") -- e as
-     duas ordens sao combinadas por fusao de postos reciprocos
-     (Cormack et al., 2009): pontuacao = 1/(60 + posto semantico) + 1/(60 +
-     posto lexical). A busca semantica sozinha nao achava termos raros: para
-     "doenca periodontal" e "artrite" nao trouxe nenhum trecho sobre elas, e para
-     "hipertireoidismo" trouxe um sobre hiperparatireoidismo; a lexical, nos
-     mesmos trechos, acha os que citam o termo.
-
-     Esse desenho veio de conferencias sem custo, feitas antes de qualquer texto
-     gerado: com o perfil inteiro como consulta, os 123 gatos recuperavam poucos
-     trechos distintos, concentrados no resumo e na metodologia de uma revisao,
-     e a busca por hipertireoidismo nao trazia nenhum trecho sobre ele; os temas
-     sem os termos do dominio e a busca hibrida ampliaram a cobertura, e a lista
-     de palavras vazias corrigiu o posto lexical de trechos genericos.
-
-AVALIACAO, com precedente em Jin et al. (2025), que avaliou o AVA (a) pela
-acuracia com que o modelo usa a informacao estruturada e (b) contra modelos de
-linguagem SEM a base de conhecimento:
-
-  (a) FIDELIDADE da traducao -- verificacao automatica de que estagio,
-      probabilidades, fatores, comorbidades e exames citados estao na ficha;
-  (b) FUNDAMENTACAO do RAG contra o MODELO PURO -- a mesma pergunta com e sem os
-      trechos; mede-se quantos itens tem sustentacao verificavel na base;
-  (c) LEITURA QUALITATIVA de 10 casos, com os principios de Xiao et al. (2025)
-      e o criterio de compreensibilidade de Wang et al. (2023).
+Traducao: o modelo de linguagem recebe a ficha do gato e escreve um texto curto
+para o veterinario; so verbaliza, nao calcula nem altera predicoes.
+Contextualizacao (RAG): busca por temas montados a partir do perfil (estagio,
+comorbidades ao menos "possiveis", achados presentes), busca por palavras
+(TF-IDF) e pedido de 3 a 5 condicoes associadas, cada uma com citacao
+obrigatoria do trecho; o mesmo pedido sem trechos (modelo puro) serve de
+comparacao. Avaliacao automatica: fidelidade da traducao a ficha;
+fundamentacao do RAG e verificabilidade na base, para o RAG e o modelo puro.
 
 Uso:
     python camada_interpretativa.py --simular          # sem API: grava prompts
@@ -173,16 +133,14 @@ def perfil(f: dict) -> str:
 # Recuperacao
 # ---------------------------------------------------------------------------
 
-# Fatores que descrevem o paciente ou o atendimento, nao um achado clinico: ficam
-# no perfil que o modelo le, mas fora da consulta de busca.
+# Fatores que descrevem o paciente ou o atendimento, nao um achado clinico:
+# fora da consulta de busca.
 NAO_CLINICOS = {"Idade", "Sexo", "Estado reprodutivo", "Raça", "Motivo da apresentação"}
-# Valores que dizem que o achado NAO esta presente: fora da busca, porque o vetor da
-# frase ignora a negacao ("Sopro cardiaco: nao" buscaria trechos sobre sopro).
+# Achado ausente fica fora da busca: a busca por palavras ignora a negacao
+# ("Sopro cardiaco: nao" traria trechos sobre sopro).
 NEGATIVOS = {"não", "não registrado", "nenhum registrado", "não testado"}
-# Consulta de cada comorbidade: o nome em portugues e o termo original do conjunto
-# de dados (config.COMORBIDADES_MODELAVEIS), porque a base mistura os dois idiomas.
-# Artrite leva "osteoartrite", o termo da literatura felina (e o unico da base);
-# FLUTD vai por extenso.
+# Consulta de cada comorbidade, em portugues e no termo original (a base
+# mistura os dois idiomas).
 TERMO_BUSCA = {
     "doença periodontal": "Doença periodontal (periodontal disease).",
     "hipertireoidismo": "Hipertireoidismo (hyperthyroidism).",
@@ -190,12 +148,10 @@ TERMO_BUSCA = {
                      "feline lower urinary tract disease, FLUTD).",
     "artrite": "Artrite ou osteoartrite (arthritis, osteoarthritis).",
 }
-RRF_K = 60        # constante da fusao de postos reciprocos (Cormack et al., 2009)
 # Comorbidade entra na busca a partir de "possivel" (20%), a mesma escala dos textos.
 COMORBIDADE_MIN = 0.20
-# Descricao de cada estagio nos comentarios da diretriz (IRIS, 2026). O numero
-# sozinho quase nao muda o vetor da frase: "estagio 2" e "estagio 4" recuperariam
-# os mesmos trechos.
+# Descricao de cada estagio na diretriz (IRIS, 2026): o numero sozinho nem
+# entra na busca por palavras (termos de um caractere sao ignorados).
 DESCRICAO_ESTAGIO = {   # (portugues, original da diretriz)
     1: ("creatinina normal com outra anormalidade renal: baixa concentração "
         "urinária, proteinúria renal ou alteração à imagem",
@@ -230,7 +186,8 @@ def consultas(f: dict) -> list[tuple[str, str]]:
 
 
 def recuperar(base: "Base", temas: list[tuple[str, str]], k: int) -> list[dict]:
-    """k trechos, alternando entre os temas pela ordem de similaridade de cada um."""
+    """Ate k trechos, alternando entre os temas pela ordem de similaridade de
+    cada um; o tema com poucos trechos cede a vez aos outros."""
     listas = [(rotulo, base.buscar(texto, k)) for rotulo, texto in temas]
     escolhidos, vistos = [], set()
     for posicao in range(k):
@@ -270,7 +227,7 @@ def diagnostico_recuperacao(recuperacoes: list[list[dict]],
                                              f"{t['texto'][:70]}")
     achados = [t for t in todos if t["tema"] == "achados"]
     return {
-        "busca": f"hibrida: semantica + lexical, fusao de postos reciprocos (k = {RRF_K})",
+        "busca": "por palavras (TF-IDF, sem palavras vazias)",
         "gatos": len(recuperacoes), "recuperacoes": len(todos),
         "trechos_distintos": int(freq.size), "trechos_na_base": len(base.trechos),
         "por_documento": pd.Series([t["documento"] for t in todos])
@@ -290,81 +247,34 @@ def diagnostico_recuperacao(recuperacoes: list[list[dict]],
 
 
 class Base:
-    """Base de conhecimento indexada: busca hibrida (semantica e lexical) nos trechos."""
+    """Base de conhecimento: trechos dos documentos e busca por palavras (TF-IDF)."""
     def __init__(self):
-        import faiss
-        if not (BASE / "indice.faiss").exists():
-            raise SystemExit("Base nao indexada. Rode antes: python indexar_base.py")
+        if not (BASE / "trechos.jsonl").exists():
+            raise SystemExit("Base nao preparada. Rode antes: python indexar_base.py")
         self.meta = json.loads((BASE / "meta.json").read_text(encoding="utf-8"))
-        if "n_janelas" not in self.meta:
-            raise SystemExit("Indice da versao anterior (sem janelas). Rode de novo: "
+        if self.meta.get("recuperador") != "tfidf":
+            raise SystemExit("Base preparada por uma versao anterior. Rode de novo: "
                              "python indexar_base.py")
-        self.indice = faiss.read_index(str(BASE / "indice.faiss"))
         self.trechos = [json.loads(l) for l in
                         open(BASE / "trechos.jsonl", encoding="utf-8")]
-        janelas = [json.loads(l) for l in open(BASE / "janelas.jsonl", encoding="utf-8")]
-        self.janela_trecho = [j["trecho"] for j in janelas]
-        if self.indice.ntotal != len(janelas):
-            raise SystemExit("indice.faiss e janelas.jsonl nao correspondem. Rode de "
-                             "novo: python indexar_base.py")
         self.texto_norm = [normalizar(t["texto"]) for t in self.trechos]
-        from indexar_base import vetorizar
-        # parte lexical da busca hibrida: TF-IDF dos trechos, reajustado a cada
-        # carga (deterministico; nada serializado)
-        self.lex_m, self.lex_vec = vetorizar([t["texto"] for t in self.trechos], "tfidf")
-        if self.meta["recuperador"] == "embeddings":
-            from indexar_base import carregar_modelo, contador_tokens
-            self.modelo = carregar_modelo(self.meta["modelo_embeddings"])
-            self.n_tokens = contador_tokens(self.modelo)
-            self.vec = None
-        else:
-            print("  ATENCAO: base indexada com TF-IDF, so para teste; nao e o "
-                  "metodo da metodologia.")
-            self.modelo = None
-            # reajuste deterministico sobre as mesmas janelas: reproduz os vetores
-            # do indice sem depender de objeto serializado
-            _, self.vec = vetorizar([j["texto"] for j in janelas], "tfidf")
+        from indexar_base import vetorizar_tfidf
+        # matriz TF-IDF dos trechos, montada a cada carga (deterministico)
+        self.matriz, self.vetorizador = vetorizar_tfidf([t["texto"] for t in self.trechos])
 
-    def _semantica(self, consulta: str) -> np.ndarray:
-        """Similaridade de cada trecho: a da sua melhor janela."""
-        if self.modelo is not None:
-            n = self.n_tokens(consulta)
-            if n > self.modelo.max_seq_length:      # nunca truncar em silencio
-                raise SystemExit(f"Consulta com {n} tokens, acima do limite do modelo "
-                                 f"({self.modelo.max_seq_length}): {consulta[:80]!r}")
-            q = self.modelo.encode([consulta], normalize_embeddings=True)
-        else:
-            q = self.vec.transform([consulta]).toarray()
-            q /= np.linalg.norm(q).clip(1e-9)
-        sim, ids = self.indice.search(q.astype("float32"), self.indice.ntotal)
-        melhor = np.full(len(self.trechos), -np.inf)
-        for s, j in zip(sim[0], ids[0]):
-            i = self.janela_trecho[j]
-            if s > melhor[i]:
-                melhor[i] = s
-        return melhor
-
-    def _lexical(self, consulta: str) -> np.ndarray:
-        """Similaridade lexical (TF-IDF, cosseno) de cada trecho com a consulta."""
-        q = self.lex_vec.transform([consulta]).toarray()[0]
-        return self.lex_m @ (q / max(np.linalg.norm(q), 1e-9))
+    def similaridade(self, consulta: str) -> np.ndarray:
+        """Similaridade do cosseno entre a consulta e cada trecho, em TF-IDF."""
+        q = self.vetorizador.transform([consulta]).toarray()[0]
+        return self.matriz @ (q / max(np.linalg.norm(q), 1e-9))
 
     def buscar(self, consulta: str, k: int) -> list[dict]:
-        """k trechos pela fusao de postos reciprocos das buscas semantica e lexical.
-        Na lexical so entram trechos com alguma palavra da consulta."""
-        sem, lex = self._semantica(consulta), self._lexical(consulta)
-        posto_sem = np.empty(len(sem), dtype=int)
-        posto_sem[np.argsort(-sem, kind="stable")] = np.arange(1, len(sem) + 1)
-        pont = 1.0 / (RRF_K + posto_sem)
-        posto_lex = np.zeros(len(lex), dtype=int)
-        com = np.flatnonzero(lex > 0)
-        posto_lex[com[np.argsort(-lex[com], kind="stable")]] = np.arange(1, len(com) + 1)
-        pont[com] += 1.0 / (RRF_K + posto_lex[com])
-        ordem = np.lexsort((-sem, -pont))[:k]       # empate: a maior semantica
-        return [{**self.trechos[i], "similaridade": float(sem[i]),
-                 "lexical": round(float(lex[i]), 4), "posto_semantico": int(posto_sem[i]),
-                 "posto_lexical": int(posto_lex[i]) or None, "rrf": float(pont[i])}
-                for i in ordem]
+        """Os k trechos mais parecidos com a consulta. So entram trechos com
+        alguma palavra da consulta; no empate, o trecho que vem antes na base."""
+        sim = self.similaridade(consulta)
+        com = np.flatnonzero(sim > 0)
+        ordem = com[np.argsort(-sim[com], kind="stable")][:k]
+        return [{**self.trechos[i], "similaridade": round(float(sim[i]), 4),
+                 "posto": posto} for posto, i in enumerate(ordem, 1)]
 
     def contem(self, termo: str, ids: list[int] | None = None) -> bool:
         """Verificacao lexical: o termo aparece no(s) trecho(s)?"""
@@ -388,12 +298,8 @@ def _termo_em(termo: str, texto: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _transitorio(e: Exception) -> bool:
-    """Erro que pode passar sozinho: limite de requisicoes, rede, falha do servidor.
-
-    Todo o resto -- chave invalida, modelo nao liberado, parametro recusado, falta
-    de credito -- se repetiria nas centenas de chamadas seguintes. Esses param a
-    execucao na hora, em vez de gerar um arquivo inteiro de respostas com erro.
-    """
+    """Erro transitorio (limite de requisicoes, rede, servidor): e repetido. Os
+    permanentes (chave, modelo, credito) interrompem a execucao."""
     import openai
     if isinstance(e, openai.RateLimitError):
         return getattr(e, "code", None) != "insufficient_quota"
@@ -636,16 +542,6 @@ def verificabilidade(r: dict, base: Base) -> dict:
 
 # ---------------------------------------------------------------------------
 
-def selecionar_qualitativos(fichas: list[dict], n: int = 10) -> list[dict]:
-    """Amostra deterministica: dois por estagio, mais dois sem creatinina."""
-    escolha = []
-    for e in (1, 2, 3, 4):
-        g = [f for f in fichas if f["_avaliacao"]["estagio_registrado"] == e]
-        escolha += g[:2]
-    resto = [f for f in fichas if f["_avaliacao"]["sem_creatinina"] and f not in escolha]
-    return (escolha + resto)[:n]
-
-
 def main() -> None:
     ap = argparse.ArgumentParser(description="Camada interpretativa.")
     ap.add_argument("--simular", action="store_true",
@@ -665,8 +561,8 @@ def main() -> None:
     print(f"[1] {len(fichas)} fichas | modelo {cfg.MODELO_LLM} "
           f"(versao declarada {versao_declarada()}) | k = {cfg.K_TRECHOS}")
     base = Base()
-    print(f"    base: {base.meta['n_trechos']} trechos ({base.meta['n_janelas']} janelas) "
-          f"de {len(base.meta['documentos'])} documentos ({base.meta['recuperador']})")
+    print(f"    base: {base.meta['n_trechos']} trechos de "
+          f"{len(base.meta['documentos'])} documentos (busca: {base.meta['recuperador']})")
 
     llm = None if args.simular else LLM()
     if args.simular:
@@ -689,10 +585,9 @@ def main() -> None:
 
         if args.simular:
             lista_buscas = "\n".join(f"- **{r}:** {c}" for r, c in temas)
-            origem = "\n".join(f"- T{i+1}: tema *{t['tema']}*; posto semântico "
-                               f"{t['posto_semantico']} (similaridade "
-                               f"{t['similaridade']:.3f}), posto lexical "
-                               f"{t['posto_lexical'] or '—'}" for i, t in enumerate(recup))
+            origem = "\n".join(f"- T{i+1}: tema *{t['tema']}*; posto {t['posto']} "
+                               f"(similaridade {t['similaridade']:.3f})"
+                               for i, t in enumerate(recup))
             (SAIDA / "prompts" / f"gato_{f['id']}.md").write_text(
                 f"# Gato {f['id']}\n\n## Papel 1 — tradução\n\n### Sistema\n\n"
                 f"{SISTEMA_TRADUCAO}\n\n### Usuário\n\n```json\n{entrada}\n```\n\n"
@@ -712,9 +607,8 @@ def main() -> None:
             "consultas": temas,
             "recuperados": [{"id": t["id"], "documento": t["documento"],
                              "pagina": t["pagina"], "tema": t["tema"],
-                             "similaridade": round(t["similaridade"], 4),
-                             "posto_semantico": t["posto_semantico"],
-                             "posto_lexical": t["posto_lexical"]} for t in recup],
+                             "similaridade": t["similaridade"],
+                             "posto": t["posto"]} for t in recup],
             "fidelidade": fidelidade(f, r_trad),
             "fundamentacao": fundamentacao(r_rag, recup, base),
             "verificabilidade_puro": verificabilidade(r_puro, base),
@@ -728,7 +622,6 @@ def main() -> None:
         json.dumps(diag, indent=2, ensure_ascii=False), encoding="utf-8")
     if args.simular:
         print(f"\n[2] prompts gravados em {SAIDA / 'prompts'}")
-        print("    Leia dois ou tres: e exatamente o que o modelo vai receber.")
     else:
         print(" " * 60, end="\r")
     print(f"[R] recuperacao: {diag['trechos_distintos']} trechos distintos em "
@@ -780,8 +673,6 @@ def main() -> None:
           f"{vr.verificavel_na_base.sum() / max(vr.itens.sum(), 1):.1%}")
     print(f"    PURO verificavel em algum ponto da base: "
           f"{vp.verificavel_na_base.sum() / max(vp.itens.sum(), 1):.1%}")
-    print("    (verificacao lexical: o termo precisa aparecer no trecho; e um")
-    print("     criterio conservador, que subestima sinonimos e parafrases)")
 
     print(f"\n[4] custo: {llm.tokens_in:,} tokens de entrada, {llm.tokens_out:,} de "
           f"saida -> US$ {llm.custo():.4f}")
@@ -811,37 +702,6 @@ def main() -> None:
         json.dumps(resumo, indent=2, ensure_ascii=False, default=float),
         encoding="utf-8")
 
-    # ------------------ amostra para leitura qualitativa ------------------
-    por_id = {r["id"]: r for r in registros}
-    amostra = [f for f in selecionar_qualitativos(fichas) if f["id"] in por_id]
-    linhas = ["# Leitura qualitativa — camada interpretativa\n",
-              "Critérios: princípios de Xiao et al. (2025) aplicáveis a cada texto, "
-              "e compreensibilidade (Wang et al., 2023). Marque de 1 (não atende) "
-              "a 5 (atende plenamente).\n"]
-    for f in amostra:
-        r = por_id[f["id"]]
-        linhas += [f"\n---\n\n## Gato {f['id']}\n",
-                   f"*Gabarito, só para a avaliadora:* estágio registrado "
-                   f"{f['_avaliacao']['estagio_registrado']}; "
-                   f"{'sem' if f['_avaliacao']['sem_creatinina'] else 'com'} creatinina.\n",
-                   "### Texto para o veterinário\n",
-                   r["traducao"].get("texto", "(erro)") + "\n",
-                   "### Contextualização por literatura (RAG)\n"]
-        for it in r["rag"].get("itens", []):
-            ok = "✓" if it.get("_sustentado") else ("~" if it.get("_citacao_valida") else "✗")
-            linhas.append(f"- {ok} **{it.get('condicao')}** "
-                          f"({', '.join(it.get('trechos', []))}) — {it.get('justificativa')}")
-        linhas += ["\n### Avaliação\n",
-                   "| Critério | Nota (1–5) |", "|---|---|",
-                   "| **Centralidade do profissional:** o texto se apresenta como apoio, não como veredito? | |",
-                   "| **Explicabilidade:** os fatores que motivaram o resultado estão inteligíveis? | |",
-                   "| **Transparência:** a incerteza e as limitações ficam claras? | |",
-                   "| **Compreensibilidade:** um clínico generalista entenderia sem ajuda? | |",
-                   "| **Correção clínica:** há alguma afirmação clinicamente incorreta? (anotar) | |",
-                   "\nObservações:\n"]
-    (SAIDA / "revisao_qualitativa.md").write_text("\n".join(linhas), encoding="utf-8")
-    print(f"\n[5] amostra para leitura qualitativa: {len(amostra)} casos em "
-          f"{SAIDA / 'revisao_qualitativa.md'}")
     print(f"\nsaidas em {SAIDA}")
 
 

@@ -1,16 +1,9 @@
 """
-Inventario do arquivo de origem: congela o dado bruto e gera o rascunho do
-dicionario de variaveis.
-
-Este script NAO altera nada e NAO decide nada. Ele:
-  1. registra o hash do arquivo bruto, para garantir que ele nao mudou;
-  2. perfila as 121 colunas (tipo, cardinalidade, ausencia, exemplos);
-  3. tenta sugerir o papel de cada coluna por heuristica de nome;
-  4. grava `dados/dicionario_variaveis.csv` para preenchimento manual.
-
-A coluna `papel` da saida e uma SUGESTAO. Ela precisa ser revisada uma a uma
-antes de rodar `triagem.py` -- e a revisao e onde voce identifica o vazamento
-estrutural, que nenhuma heuristica pega.
+Inventario do arquivo de origem: registra o SHA-256 do arquivo, perfila as
+colunas (tipo, cardinalidade, ausencia, exemplos), sugere o papel de cada uma
+por heuristica de nome e grava o rascunho de dados/dicionario_variaveis.csv.
+A coluna `papel` e uma sugestao, revisada a mao antes da triagem: e na revisao
+que se identifica o vazamento estrutural, que nenhuma heuristica pega.
 
 Uso:
     python inventario.py
@@ -28,7 +21,6 @@ import argparse
 import hashlib
 import json
 import re
-import sys
 from datetime import datetime
 
 import pandas as pd
@@ -76,8 +68,7 @@ def carregar_bruto(caminho=None) -> pd.DataFrame:
 # Passo 2: perfilar e sugerir papel
 # ---------------------------------------------------------------------------
 
-# Heuristicas de nome. Deliberadamente conservadoras: na duvida, sugerem
-# "entrada", para que a revisao manual tenha de olhar a coluna.
+# Heuristicas de nome, conservadoras: na duvida, "entrada".
 REGRAS_PAPEL: list[tuple[str, str]] = [
     (r"\b(id|ident|patient|animal|case|record)[_\s]?(id|no|num)?\b", "id"),
     (r"iris.*(stage|estad)|stage.*iris", "alvo_iris"),

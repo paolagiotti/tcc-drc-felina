@@ -1,6 +1,5 @@
 """Preparacao do texto da base de conhecimento: normalizacao, deteccao de titulos
-e de sumarios, divisao em trechos e janelas, busca lexical. Sem PDFs nem modelo
-de embeddings."""
+e de sumarios, divisao em trechos e busca por palavras (TF-IDF). Sem PDFs."""
 import numpy as np
 import pytest
 
@@ -16,6 +15,21 @@ def test_palavras_vazias_das_duas_linguas():
     assert "ou" in ib.PALAVRAS_VAZIAS and "the" in ib.PALAVRAS_VAZIAS
     assert "nao" in ib.PALAVRAS_VAZIAS                 # normalizada, sem acento
     assert "creatinina" not in ib.PALAVRAS_VAZIAS
+
+
+def test_palavras_vazias_combinam_com_o_tokenizador():
+    """As contracoes da lista inglesa (can't, isn't) entram como as partes que o
+    tokenizador produz (can, isn); sem isso, o scikit-learn avisa que a lista e
+    o tokenizador nao combinam, e essas partes entram na busca."""
+    import warnings
+    with warnings.catch_warnings(record=True) as avisos:
+        warnings.simplefilter("always")
+        _, vec = ib.vetorizar_tfidf(["The cat can't eat and isn't well.",
+                                     "O gato não come e está fraco."])
+    assert not [a for a in avisos if "stop_words" in str(a.message)]
+    vocab = set(vec.vocabulary_)
+    assert {"can", "isn", "nao", "esta"}.isdisjoint(vocab)
+    assert {"cat", "eat", "well", "gato", "come", "fraco"} <= vocab
 
 
 @pytest.mark.parametrize("linha, titulo", [
@@ -62,32 +76,16 @@ def test_empacotar_e_dividir_respeitam_o_limite():
         "Uma frase curta. Outra frase curta. Esta frase aqui e bem mais longa que o limite.")
 
 
-def test_janelas_deslizantes_cobrem_todas_as_frases():
-    frases = ["A primeira frase.", "A segunda frase.", "A terceira frase.", "A quarta."]
-    txt = " ".join(frases)
-    cabe = lambda s: len(s) <= 36          # cabem duas frases, nao tres
-    jan = ib.deslizantes(txt, cabe)
-    assert jan == ["A primeira frase. A segunda frase.", "A segunda frase. A terceira frase.",
-                   "A terceira frase. A quarta."]
-    assert all(cabe(j) for j in jan)
-    # janela contida na anterior e descartada: so uma janela quando tudo cabe
-    assert ib.deslizantes(txt, lambda s: len(s) <= 200) == [txt]
-
-
-def test_janelas_sem_modelo_usam_o_trecho_inteiro():
-    trechos = [{"id": 0, "texto": "um"}, {"id": 1, "texto": "dois"}]
-    jan = ib.janelas(trechos, modelo=None)
-    assert [j["trecho"] for j in jan] == [0, 1] and jan[0]["tokens"] is None
-
-
 @pytest.mark.filterwarnings("ignore:Your stop_words may be inconsistent")
 def test_vetorizar_tfidf_normaliza_e_ignora_palavras_vazias():
     textos = ["a doença periodontal é frequente ou comum",
               "the periodontal disease is common",
-              "hipertireoidismo felino"]
-    m, vec = ib.vetorizar(textos, "tfidf")
+              "hipertireoidismo felino no estágio 3"]
+    m, vec = ib.vetorizar_tfidf(textos)
     assert m.shape[0] == 3 and np.allclose(np.linalg.norm(m, axis=1), 1.0)
     vocab = set(vec.vocabulary_)
     assert "periodontal" in vocab and "ou" not in vocab and "the" not in vocab
+    # termo de um caractere (o numero do estagio) fica fora da busca
+    assert "estagio" in vocab and "3" not in vocab
     # a palavra em comum aproxima os dois primeiros textos
     assert m[0] @ m[1] > m[0] @ m[2] == pytest.approx(0.0)

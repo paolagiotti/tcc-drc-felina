@@ -1,21 +1,10 @@
 """
-Fichas dos pacientes: a entrada estruturada da camada interpretativa.
-
-Para cada um dos 123 gatos, reune numa ficha unica o que os tres componentes
-produziram:
-
-  - estadiamento: estagio predito, probabilidade de cada estagio, e os cinco
-    fatores que mais pesaram, COM DIRECAO (a favor ou contra o estagio predito)
-    e com o valor que o gato tinha naquela variavel;
-  - comorbidades: probabilidade de cada uma das quatro, em ordem;
-  - exames: os que faltam, ordenados pela reducao esperada de duvida.
-
-Tudo FORA DA AMOSTRA: cada gato e descrito por um modelo que nao o viu no
-treino (primeira repeticao da validacao cruzada, cinco particoes).
-
-O estagio registrado pelo veterinario fica na ficha apenas para a AVALIACAO, em
-campo separado, e nunca e enviado ao modelo de linguagem -- no uso real ele nao
-existe.
+Fichas dos pacientes: a entrada estruturada da camada interpretativa. Para
+cada gato, fora da amostra (primeira repeticao da validacao cruzada): estagio
+predito e probabilidades, os cinco fatores SHAP com direcao e valor, os exames
+faltantes por ganho esperado e as comorbidades por probabilidade. O estagio
+registrado fica em campo separado, so para avaliacao, e nunca vai ao modelo
+de linguagem.
 
 Uso:
     python fichas_pacientes.py
@@ -40,9 +29,8 @@ warnings.filterwarnings("ignore", message=".*Early stopping criterion not reache
 SAIDA = cfg.SAIDA_RELATORIOS / "camada"
 TOP_FATORES = 5
 
-# Traducao de valores categoricos e nomes para o texto em portugues. Feita aqui,
-# e nao pelo modelo de linguagem, para que a verificacao de fidelidade compare
-# exatamente os mesmos termos.
+# Traducao de valores para o portugues, feita no codigo para que a verificacao
+# de fidelidade compare os mesmos termos.
 TRADUCAO = {
     "Clinical signs": "sinais clínicos", "Other": "outro",
     "Geriatric health clinic": "check-up geriátrico",
@@ -118,7 +106,7 @@ def main() -> None:
     fichas = []
     for i, (tr, te) in enumerate(splits, 1):
         est = mdl.estimadores(cs["braco"])[cs["modelo"]]
-        pipe = mdl.construir_pipeline(est, num, cat, cs["braco"], y.iloc[tr], "nativo")
+        pipe = mdl.construir_pipeline(est, num, cat, cs["braco"], "nativo")
         pipe.fit(df.iloc[tr][colunas], y.iloc[tr])
         rec = Recomendador(pipe, colunas, df.iloc[tr][colunas], y.iloc[tr], exames,
                            amostras=15, semente=i)
@@ -147,9 +135,8 @@ def main() -> None:
             recomend = []
             if faltam:
                 g = rec.ganho_esperado(df.loc[idx, colunas], faltam)
-                # ganho <= 0: a aproximacao por valores amostrados nao garante
-                # ganho positivo (limitacao registrada no escopo 3). Esses exames
-                # sao marcados para NAO serem recomendados.
+                # ganho <= 0 (a aproximacao por amostras nao garante ganho
+                # positivo): o exame fica marcado para nao ser recomendado
                 recomend = [{"exame": e, "ganho_bits": round(float(g[e]), 3),
                              "reduz_duvida": bool(g[e] > 0)}
                             for e in ordenar(g, False)]

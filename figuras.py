@@ -1,15 +1,8 @@
 """
-Figuras do capitulo de resultados, geradas a partir das saidas do experimento.
-
-Cada figura sai de arquivos produzidos pela rodada final, e nunca de numeros
-digitados a mao: se a rodada mudar, as figuras mudam junto. Estilo sobrio,
-rotulos em portugues, 300 dpi, legivel em impressao em tons de cinza.
-
-Regras de forma: sem titulo dentro da imagem (a legenda vai no texto, acima da
-figura); virgula decimal; estagios em
-algarismos romanos (I a IV), como no texto; desenhadas na largura final
-(LARGURA = 16 cm; MEIA = metade, para pares lado a lado), com letra de 10 pt
-em tudo, para incluir com width=\linewidth (ou 0.49\linewidth) sem reduzir.
+Figuras do capitulo de resultados, geradas das saidas da execucao final (nunca
+de numeros digitados). Padrao unico: 16 cm de largura (MEIA para pares lado a
+lado), letra de 10 pt, 300 dpi, virgula decimal, estagios em romanos, sem
+titulo dentro da imagem.
 
 Uso:
     python figuras.py
@@ -37,14 +30,15 @@ plt.rcParams.update({
     "xtick.labelsize": 10, "ytick.labelsize": 10, "legend.fontsize": 10,
     "axes.spines.top": False, "axes.spines.right": False,
     "figure.dpi": 100, "savefig.dpi": 300,
-    # Tamanho final = figsize: sem recorte "tight", que mudava a largura e,
-    # com ela, o tamanho da letra no texto. O layout restrito acomoda rotulos.
+    # tamanho final = figsize, sem recorte "tight"; o layout restrito acomoda
+    # os rotulos
     "savefig.bbox": "standard", "figure.constrained_layout.use": True,
 })
 LARGURA = 16 / 2.54          # 16 cm, largura do texto
 MEIA = 7.7 / 2.54            # metade, com espaco entre as duas
 ROMANOS = {1: "I", 2: "II", 3: "III", 4: "IV"}
 
+# Nomes das variaveis em portugues; usados tambem pelas fichas e pela camada.
 NOMES_PT = {
     "Creatinine at diagnosis": "Creatinina",
     "USG at diagnosis": "Densidade urinária",
@@ -68,20 +62,24 @@ NOMES_PT = {
 
 
 def _br(v: float, casas: int = 3) -> str:
-    """Numero com virgula decimal, padrao do texto em portugues."""
-    return f"{v:.{casas}f}".replace(".", ",")
+    """Numero com virgula decimal e sinal de menos tipografico."""
+    s = f"{v:+.{casas}f}" if v < 0 else f"{v:.{casas}f}"
+    return s.replace(".", ",").replace("-", "−")
 
 
 def _eixo_br(ax, eixo: str = "y", casas: int | None = None) -> None:
     """Rotulos de eixo com virgula decimal."""
     from matplotlib.ticker import FuncFormatter
     def fmt(x, _):
-        if casas is None:
-            t = f"{x:g}"
-        else:
-            t = f"{x:.{casas}f}"
+        t = f"{x:g}" if casas is None else f"{x:.{casas}f}"
         return t.replace(".", ",")
     (ax.yaxis if eixo == "y" else ax.xaxis).set_major_formatter(FuncFormatter(fmt))
+
+
+def _tira_eixo(ax):
+    """Remove as bordas superior e direita."""
+    for lado in ("top", "right"):
+        ax.spines[lado].set_visible(False)
 
 
 def _salvar(fig, destino: Path, nome: str) -> None:
@@ -91,28 +89,31 @@ def _salvar(fig, destino: Path, nome: str) -> None:
     print(f"  {nome}.png")
 
 
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------- dados
 
-def fig_ausencia_por_estagio(destino: Path) -> None:
-    """Presenca de creatinina por estagio registrado (falta sobretudo no IV)."""
+def fig_ausencia(destino: Path) -> None:
+    """Presenca de creatinina por estagio registrado."""
     df, y, _ = __import__("modelagem").carregar_coorte()
     tem = df[cfg.COL_CREATININA].notna()
     est = [1, 2, 3, 4]
     pct = [100 * tem[y == e].mean() for e in est]
     n = [int((y == e).sum()) for e in est]
-    fig, ax = plt.subplots(figsize=(LARGURA, 2.9))
+    k = [int(tem[y == e].sum()) for e in est]
+    fig, ax = plt.subplots(figsize=(LARGURA, 1.7))
     cores = [CLARO, CLARO, CLARO, DESTAQUE]
-    barras = ax.bar([f"Estágio {ROMANOS[e]}" for e in est], pct, color=cores,
-                    edgecolor="black", linewidth=.6, width=.6)
-    for b, p, k in zip(barras, pct, n):
-        ax.text(b.get_x() + b.get_width() / 2, p + 2, f"{p:.0f}%\n(n = {k})",
-                ha="center", va="bottom", fontsize=10)
-    ax.set_ylim(0, 125)
-    ax.set_yticks([0, 25, 50, 75, 100])
-    ax.set_ylabel("Gatos com creatinina (%)")
-    ax.set_xlabel("Estágio IRIS registrado")
+    barras = ax.barh([f"Estágio {ROMANOS[e]}" for e in est][::-1], pct[::-1],
+                     color=cores[::-1], edgecolor="black", linewidth=.6, height=.62)
+    for b, p, kk, nn in zip(barras, pct[::-1], k[::-1], n[::-1]):
+        ax.text(p + 1.5, b.get_y() + b.get_height() / 2,
+                f"{p:.0f}% ({kk} de {nn})", va="center", fontsize=10)
+    ax.set_xlim(0, 100)
+    ax.set_xticks([0, 25, 50, 75, 100])
+    ax.set_xlabel("Gatos com creatinina medida (%)")
+    _tira_eixo(ax)
     _salvar(fig, destino, "fig_ausencia_creatinina_por_estagio")
 
+
+# --------------------------------------------------------- estadiamento
 
 def _linha_sistema(pasta: Path) -> pd.Series | None:
     """Linha da configuracao do sistema no resumo de configuracoes de uma pasta."""
@@ -127,13 +128,13 @@ def _linha_sistema(pasta: Path) -> pd.Series | None:
 
 
 def fig_tratamentos(rel: Path, pastas: dict, destino: Path) -> None:
-    """A escada entre imputacao, indicador e tratamento nativo."""
+    """Configuracao do sistema sob imputacao, indicador e tratamento nativo."""
     metricas = [("kappa_quadratico", "Kappa quadrático", False),
                 ("acuracia_balanceada", "Acurácia balanceada", False),
                 ("rps", "RPS (menor é melhor)", True)]
     linhas = {nome: _linha_sistema(rel / p) for nome, p in pastas.items()}
     if any(v is None for v in linhas.values()):
-        print("  (tratamentos: pasta ausente ou sem a configuracao do sistema -- pulada)")
+        print("  (tratamentos: pasta ausente ou sem a configuracao do sistema; pulada)")
         return
     fig, eixos = plt.subplots(1, 3, figsize=(LARGURA, 3.0))
     rotulos = list(pastas.keys())
@@ -152,61 +153,15 @@ def fig_tratamentos(rel: Path, pastas: dict, destino: Path) -> None:
                     fontsize=10)
         ax.set_ylim(0, max(topo) * 1.18)
         ax.set_title(titulo)            # nome do painel, nao titulo da figura
-        _eixo_br(ax, "y", 2 if menor else 1)   # casas fixas no eixo
+        _eixo_br(ax, "y", 2 if menor else 1)
         ax.tick_params(axis="x", labelrotation=30)
         for r in ax.get_xticklabels():
             r.set_ha("right")
     _salvar(fig, destino, "fig_tratamentos_ausentes")
 
 
-def fig_sem_creatinina(rel: Path, pastas: dict, destino: Path) -> None:
-    """Deteccao do estagio IV com e sem creatinina, por tratamento."""
-    dados = {}
-    for nome, p in pastas.items():
-        arq = rel / p / "predicoes_sistema.csv"
-        if not arq.exists():
-            print("  (sem creatinina: predicoes_sistema.csv ausente -- pulada)")
-            return
-        ps = pd.read_csv(arq)
-        tem = ps.predito_regra.notna()
-        iv = ps.iris_registrado == 4
-        ok = ps.predito_modelo == 4
-        dados[nome] = (int((iv & tem & ok).sum()), int((iv & tem).sum()),
-                       int((iv & ~tem & ok).sum()), int((iv & ~tem).sum()))
-    fig, ax = plt.subplots(figsize=(LARGURA, 3.0))
-    x = np.arange(len(dados))
-    larg = .36
-    com = [100 * a / b if b else 0 for a, b, _, _ in dados.values()]
-    sem = [100 * c / d if d else 0 for _, _, c, d in dados.values()]
-    b1 = ax.bar(x - larg / 2, com, larg, color=CLARO, edgecolor="black",
-                linewidth=.6, label="com creatinina")
-    b2 = ax.bar(x + larg / 2, sem, larg, color=DESTAQUE, edgecolor="black",
-                linewidth=.6, label="sem creatinina")
-    for barras, idx in ((b1, (0, 1)), (b2, (2, 3))):
-        for b, v in zip(barras, dados.values()):
-            ax.text(b.get_x() + b.get_width() / 2, b.get_height() + 2,
-                    f"{v[idx[0]]} de {v[idx[1]]}", ha="center", fontsize=10)
-    ax.set_xticks(x)
-    ax.set_xticklabels(list(dados.keys()))
-    ax.set_ylim(0, 135)
-    ax.set_yticks([0, 25, 50, 75, 100])
-    ax.set_ylabel("Estágio IV detectado (%)")
-    ax.set_xlabel("Tratamento dos valores ausentes")
-    ax.legend(frameon=False, loc="upper center", ncol=2)
-    _salvar(fig, destino, "fig_estagio4_com_sem_creatinina")
-
-
-def fig_matriz(rel: Path, pasta: str, destino: Path) -> None:
-    """Matriz de confusao do sistema, com a fronteira I/II destacada."""
-    arq = rel / pasta / "predicoes_sistema.csv"
-    if not arq.exists():
-        print("  (matriz: predicoes_sistema.csv ausente -- pulada)")
-        return
-    ps = pd.read_csv(arq)
-    m = pd.crosstab(ps.iris_registrado, ps.predito_modelo).reindex(
-        index=[1, 2, 3, 4], columns=[1, 2, 3, 4], fill_value=0)
-    # Mesmo tamanho, escala e cinza da figura do teto do rotulo: as duas vao
-    # lado a lado. Sem barra de cores: os numeros ja estao nas celulas.
+def _matriz(m: pd.DataFrame, xlabel: str, ylabel: str, destino: Path, nome: str) -> None:
+    """Matriz 4 x 4 em cinza, com a fronteira I/II destacada."""
     fig, ax = plt.subplots(figsize=(MEIA, MEIA * .95))
     ax.imshow(m.values, cmap="Greys", vmin=0, vmax=max(m.values.max(), 1) * 1.15)
     for i in range(4):
@@ -218,127 +173,197 @@ def fig_matriz(rel: Path, pasta: str, destino: Path) -> None:
                                ls="--", edgecolor="black"))
     ax.set_xticks(range(4)); ax.set_yticks(range(4))
     ax.set_xticklabels(list(ROMANOS.values())); ax.set_yticklabels(list(ROMANOS.values()))
-    ax.set_xlabel("Estágio predito pelo sistema"); ax.set_ylabel("Estágio registrado")
+    ax.set_xlabel(xlabel); ax.set_ylabel(ylabel)
     ax.spines[:].set_visible(False)
-    _salvar(fig, destino, "fig_matriz_confusao_sistema")
+    _salvar(fig, destino, nome)
+
+
+def fig_matriz(rel: Path, pasta: str, destino: Path) -> None:
+    """Matriz de confusao da configuracao do sistema."""
+    arq = rel / pasta / "predicoes_sistema.csv"
+    if not arq.exists():
+        print("  (matriz: predicoes_sistema.csv ausente; pulada)")
+        return
+    ps = pd.read_csv(arq)
+    m = pd.crosstab(ps.iris_registrado, ps.predito_modelo).reindex(
+        index=[1, 2, 3, 4], columns=[1, 2, 3, 4], fill_value=0)
+    _matriz(m, "Estágio predito pelo sistema", "Estágio registrado", destino,
+            "fig_matriz_confusao_sistema")
 
 
 def fig_teto_rotulo(rel: Path, pasta: str, destino: Path) -> None:
     """Regra IRIS aplicada a creatinina contra o estagio registrado."""
     arq = rel / pasta / "contingencia_regra_rotulo.csv"
     if not arq.exists():
-        print("  (teto do rotulo: contingencia ausente -- pulada)")
+        print("  (teto do rotulo: contingencia ausente; pulada)")
         return
     c = pd.read_csv(arq, index_col=0)
     c.columns = [int(float(x)) for x in c.columns]
     c = c.reindex(index=[1, 2, 3, 4], columns=[1, 2, 3, 4], fill_value=0)
-    fig, ax = plt.subplots(figsize=(MEIA, MEIA * .95))
-    ax.imshow(c.values, cmap="Greys", vmin=0, vmax=max(c.values.max(), 1) * 1.15)
-    for i in range(4):
-        for j in range(4):
-            v = c.values[i, j]
-            ax.text(j, i, v, ha="center", va="center", fontsize=10,
-                    color="white" if v > c.values.max() * .55 else "black")
-    ax.add_patch(plt.Rectangle((-.5, -.5), 2, 2, fill=False, lw=1.6,
-                               ls="--", edgecolor="black"))
-    ax.set_xticks(range(4)); ax.set_yticks(range(4))
-    ax.set_xticklabels(list(ROMANOS.values())); ax.set_yticklabels(list(ROMANOS.values()))
-    ax.set_xlabel("Estágio pela regra IRIS (creatinina)")
-    ax.set_ylabel("Estágio registrado")
-    # n e concordancia vao para a legenda no texto (antes estavam no titulo)
     print(f"    regra x registro: n = {c.values.sum()}, "
           f"concordancia = {np.trace(c.values)}")
-    ax.spines[:].set_visible(False)
-    _salvar(fig, destino, "fig_teto_rotulo")
+    _matriz(c, "Estágio pela regra IRIS (creatinina)", "Estágio registrado", destino,
+            "fig_teto_rotulo")
 
 
 def fig_shap(rel: Path, destino: Path) -> None:
-    """Importancia global (SHAP) e comparacao entre gatos com e sem creatinina."""
+    """Importancia global (SHAP fora da amostra), com as variaveis de Bradley destacadas."""
     g = rel / "escopo1_shap" / "shap_global.csv"
-    cs = rel / "escopo1_shap" / "shap_com_sem_creatinina.csv"
-    if g.exists():
-        t = pd.read_csv(g).head(10).iloc[::-1]
-        fig, ax = plt.subplots(figsize=(LARGURA, 3.6))
-        nomes = [NOMES_PT.get(v, v) for v in t.variavel]
-        cores = [DESTAQUE if v in cfg.CONJUNTO_PARCIMONIOSO else CLARO
-                 for v in t.variavel]
-        ax.barh(nomes, t.proporcao, color=cores, edgecolor="black", linewidth=.6)
-        for i, v in enumerate(t.proporcao):
-            ax.text(v + .004, i, _br(v), va="center", fontsize=10)
-        ax.set_xlabel("Proporção da explicação (SHAP, fora da amostra)")
-        _eixo_br(ax, "x", 2)
-        from matplotlib.patches import Patch
-        ax.legend(handles=[Patch(facecolor=DESTAQUE, edgecolor="black", linewidth=.6,
-                                 label="variáveis de Bradley et al. (2019)")],
-                  frameon=False, loc="lower right")
-        _salvar(fig, destino, "fig_shap_global")
-    if cs.exists():
-        t = pd.read_csv(cs, index_col=0).head(8).iloc[::-1]
-        fig, ax = plt.subplots(figsize=(LARGURA, 3.8))
-        y = np.arange(len(t))
-        ax.barh(y + .2, t.com_creatinina, .4, color=CLARO, edgecolor="black",
-                linewidth=.6, label="com creatinina")
-        ax.barh(y - .2, t.sem_creatinina, .4, color=DESTAQUE, edgecolor="black",
-                linewidth=.6, label="sem creatinina")
-        ax.set_yticks(y)
-        ax.set_yticklabels([NOMES_PT.get(v, v) for v in t.index])
-        ax.set_xlabel("Proporção da explicação (SHAP)")
-        _eixo_br(ax, "x", 2)
-        # No grupo sem creatinina, a barra da creatinina e a contribuicao da
-        # AUSENCIA dela; a legenda no texto precisa dizer isso.
-        ax.legend(frameon=False, loc="lower right")
-        _salvar(fig, destino, "fig_shap_com_sem_creatinina")
+    if not g.exists():
+        print("  (shap: shap_global.csv ausente; pulada)")
+        return
+    t = pd.read_csv(g).head(10).iloc[::-1]
+    fig, ax = plt.subplots(figsize=(LARGURA, 3.6))
+    nomes = [NOMES_PT.get(v, v) for v in t.variavel]
+    cores = [DESTAQUE if v in cfg.VARIAVEIS_BRADLEY else CLARO
+             for v in t.variavel]
+    ax.barh(nomes, t.proporcao, color=cores, edgecolor="black", linewidth=.6)
+    for i, v in enumerate(t.proporcao):
+        ax.text(v + .004, i, _br(v), va="center", fontsize=10)
+    ax.set_xlabel("Proporção da explicação (SHAP, fora da amostra)")
+    _eixo_br(ax, "x", 2)
+    from matplotlib.patches import Patch
+    ax.legend(handles=[Patch(facecolor=DESTAQUE, edgecolor="black", linewidth=.6,
+                             label="variáveis de Bradley et al. (2019)")],
+              frameon=False, loc="lower right")
+    _salvar(fig, destino, "fig_shap_global")
+
+
+# (arquivo, comparado, metrica, grupo, rotulo da metrica, destaque)
+ABLACOES = [
+    ("escopo1_restrito_nativo", "SEM_CREATININA", "acuracia_balanceada",
+     "Creatinina, quatro estágios (74)", "Acurácia balanceada", True),
+    ("escopo1_restrito_nativo", "SEM_CREATININA", "kappa_quadratico",
+     "Creatinina, quatro estágios (74)", "Kappa quadrático", True),
+    ("escopo1_binario_restrito_nativo", "SEM_CREATININA", "acuracia_balanceada",
+     "Creatinina, alvo binário (74)", "Acurácia balanceada", True),
+    ("escopo1_nativo", "SEM_SUBESTADIAMENTO", "acuracia_balanceada",
+     "UPC e pressão arterial (123)", "Acurácia balanceada", False),
+    ("escopo1_nativo", "SEM_SUBESTADIAMENTO", "kappa_quadratico",
+     "UPC e pressão arterial (123)", "Kappa quadrático", False),
+]
+
+
+def fig_ablacoes(rel: Path, destino: Path) -> None:
+    """Diferenca pareada (conjunto completo menos sem as variaveis) por metrica e grupo."""
+    fig, ax = plt.subplots(figsize=(LARGURA, 2.4))
+    n = len(ABLACOES)
+    ys = np.arange(n)[::-1]
+    for yi, (pasta, comp, met, grupo, rot, dest) in zip(ys, ABLACOES):
+        t = pd.read_csv(rel / pasta / "ablacoes.csv")
+        r = t[(t.modelo == "gradiente") & (t.braco == "nenhum")
+              & (t.comparado == comp) & (t.metrica == met)]
+        assert len(r) == 1, (pasta, comp, met)
+        r = r.iloc[0]
+        lo, hi, med = r.delta_min, r.delta_max, r.delta_mediano
+        favor, contra = int(r.folds_a_favor), int(r.folds_contra)
+        empate = int(r.n_folds) - favor - contra
+        ax.plot([lo, hi], [yi, yi], color=CINZA, lw=1.2, zorder=1)
+        for x in (lo, hi):
+            ax.plot([x, x], [yi - .12, yi + .12], color=CINZA, lw=1.2)
+        ax.plot(med, yi, "o", ms=7, zorder=3, markeredgecolor="black",
+                markeredgewidth=.5, color=DESTAQUE if dest else CLARO)
+        ax.text(hi + .015, yi, _br(med), va="center", fontsize=10)
+        ax.text(.90, yi, f"{favor} / {contra} / {empate}", va="center",
+                ha="center", fontsize=10)
+    ax.text(.90, ys.max() + .72, "a favor / contra / empate", va="center",
+            ha="center", fontsize=9, color=CINZA)
+    ax.axvline(0, color="black", lw=.8, ls="--")
+    ax.set_yticks(ys)
+    ax.set_yticklabels([f"{g}\n{m}" for _, _, _, g, m, _ in ABLACOES])
+    ax.set_ylim(-.6, n - .1)
+    ax.set_xlim(-.2, 1.02)
+    xt = [-.2, 0, .2, .4, .6]
+    ax.set_xticks(xt)
+    ax.set_xticklabels([_br(t, 1) for t in xt])
+    ax.spines["bottom"].set_bounds(-.2, .6)
+    ax.set_xlabel("Diferença (conjunto completo − sem as variáveis)", loc="left")
+    _tira_eixo(ax)
+    _salvar(fig, destino, "fig_ablacoes")
+
+
+# --------------------------------------------------------- recomendacao
+
+COMORB = [  # ordem por AUC decrescente; nome da coluna e nome no texto
+    ("Hyperthyroidism", "Hipertireoidismo"),
+    ("Arthritis", "Artrite"),
+    ("Periodontal disease", "Doença periodontal"),
+    ("Cystitis/FLUTD", "Cistite/DTUIF"),
+]
+METRICAS_COMORB = [
+    ("map", "MAP"),
+    ("ndcg", "NDCG"),
+    ("p_at_1", "Acerto na primeira posição"),
+]
 
 
 def fig_comorbidades(rel: Path, destino: Path) -> None:
-    """Componente de comorbidades: diferenca por particao entre o modelo e a
-    ordem fixa por prevalencia, nas quatro metricas de ordenacao."""
-    arq = rel / "escopo2" / "metricas_por_particao.csv"
-    if not arq.exists():
-        print("  (comorbidades: metricas_por_particao.csv ausente -- pulada)")
-        return
-    m = pd.read_csv(arq)
-    mets = [("map", "MAP"), ("ndcg", "NDCG"), ("recall_at_2", "Recall@2"),
-            ("p_at_1", "Acerto no topo")][::-1]
-    rng = np.random.default_rng(42)     # so o espalhamento vertical dos pontos
-    fig, ax = plt.subplots(figsize=(LARGURA, 3.0))
-    difs, rots = [], []
-    for i, (col, _) in enumerate(mets):
-        a = m[m.formulacao == "independente"].set_index("particao")[col]
-        b = m[m.formulacao == "prevalencia"].set_index("particao")[col]
-        d = (a - b).dropna().sort_index()
-        difs.append(d)
-        y = i + rng.uniform(-.15, .15, len(d))
-        ax.scatter(d, y, s=16, color=DESTAQUE, edgecolor="black", linewidth=.4,
-                   zorder=3)
-        ax.plot([d.median()] * 2, [i - .28, i + .28], color="black", lw=2, zorder=4)
-        fav, contra = int((d > 0).sum()), int((d < 0).sum())
-        rots.append(f"a favor: {fav} de {len(d)}" + (f"; contra: {contra}" if contra else ""))
-    ax.axvline(0, color=CINZA, lw=.8, ls="--")
-    ax.set_yticks(range(len(mets)))
-    ax.set_yticklabels([n for _, n in mets])
-    ax.set_ylim(-.6, len(mets) - .4)
-    dir_ = ax.twinx()                   # contagem por metrica, a direita
-    dir_.set_ylim(ax.get_ylim())
-    dir_.set_yticks(range(len(mets)))
-    dir_.set_yticklabels(rots)
-    dir_.tick_params(axis="y", length=0)
-    dir_.spines[:].set_visible(False)
-    ax.set_xlabel("Diferença por partição: modelo menos ordem por prevalência")
-    # Marcas a cada 0,02: com o passo automatico (0,025) e duas casas, o
-    # rotulo arredondava a posicao (0,025 aparecia como 0,03).
-    from matplotlib.ticker import MultipleLocator
-    ax.xaxis.set_major_locator(MultipleLocator(0.02))
-    _eixo_br(ax, "x", 2)
-    _salvar(fig, destino, "fig_comorbidades_particoes")
+    """(a) AUC por comorbidade; (b) diferenca pareada entre o modelo e a ordem
+    por prevalencia, por particao."""
+    m = pd.read_csv(rel / "escopo2" / "metricas_por_particao.csv")
+    ind = m[m.formulacao == "independente"].set_index("particao").sort_index()
+    prev = m[m.formulacao == "prevalencia"].set_index("particao").sort_index()
+    assert len(ind) == 15 and len(prev) == 15
+
+    fig, (a, b) = plt.subplots(2, 1, figsize=(LARGURA, 3.2),
+                               gridspec_kw={"height_ratios": [1.05, 0.95]})
+
+    y = np.arange(len(COMORB))[::-1]
+    for yi, (col, nome) in zip(y, COMORB):
+        v = ind[f"auc_{col}_pre"].values
+        a.plot([v.min(), v.max()], [yi, yi], color=CINZA, lw=1.2, zorder=1)
+        for x in (v.min(), v.max()):
+            a.plot([x, x], [yi - .14, yi + .14], color=CINZA, lw=1.2)
+        a.plot(np.median(v), yi, "o", color=DESTAQUE, ms=7, zorder=3)
+        a.text(v.max() + .012, yi, _br(np.median(v)), va="center", fontsize=10)
+    a.axvline(.5, color="black", lw=.8, ls="--")
+    a.text(.508, y.max() + .95, "acaso (0,5)", fontsize=9, va="center")
+    a.set_yticks(y)
+    a.set_yticklabels([n for _, n in COMORB])
+    a.set_xlim(.45, 1.02)
+    a.set_ylim(-.6, len(COMORB) - .3 + .7)
+    xt = [.5, .6, .7, .8, .9, 1.0]
+    a.set_xticks(xt)
+    a.set_xticklabels([_br(t, 1) for t in xt])
+    a.set_xlabel("AUC (mediana e faixa entre as 15 partições)", loc="left")
+    a.set_title("(a) Discriminação de cada classificador", loc="left")
+    _tira_eixo(a)
+
+    rng = np.random.default_rng(7)
+    ym = np.arange(len(METRICAS_COMORB))[::-1]
+    for yi, (col, nome) in zip(ym, METRICAS_COMORB):
+        d = ind[col].values - prev[col].values
+        jit = rng.uniform(-.17, .17, size=d.size)
+        b.scatter(d, yi + jit, s=22, facecolor=CLARO, edgecolor="black",
+                  linewidth=.5, zorder=2)
+        med = float(np.median(d))
+        b.plot([med, med], [yi - .3, yi + .3], color=DESTAQUE, lw=2.4, zorder=3)
+        mp, mm = np.median(prev[col].values), np.median(ind[col].values)
+        b.text(.235, yi, f"{_br(mp)} → {_br(mm)}  (+{_br(med)})",
+               va="center", ha="center", fontsize=10)
+    b.text(.235, ym.max() + .95, "prevalência → modelo (ganho)", va="center",
+           ha="center", fontsize=9, color=CINZA)
+    b.axvline(0, color="black", lw=.8, ls="--")
+    b.set_yticks(ym)
+    b.set_yticklabels([n for _, n in METRICAS_COMORB])
+    b.set_ylim(-.6, len(METRICAS_COMORB) - .3 + .7)
+    b.set_xlim(-.05, .33)
+    xt = [-.05, 0, .05, .10, .15]
+    b.set_xticks(xt)
+    b.set_xticklabels([_br(t, 2) for t in xt])
+    b.spines["bottom"].set_bounds(-.05, .15)
+    b.set_xlabel("Modelo − ordem por prevalência, por partição\n(positivo: modelo melhor)",
+                 loc="left")
+    b.set_title("(b) Ranqueamento contra a ordem por prevalência", loc="left")
+    _tira_eixo(b)
+    _salvar(fig, destino, "fig_comorbidades_resultados")
 
 
 def fig_exames(rel: Path, destino: Path) -> None:
-    """Componente de exames: ganho esperado do melhor exame no estado real,
-    gatos com e sem a bioquimica feita."""
+    """Ganho esperado do melhor exame no estado real, gatos com e sem a bioquimica."""
     arq = rel / "escopo3" / "recomendacoes_estado_real.csv"
     if not arq.exists():
-        print("  (exames: recomendacoes_estado_real.csv ausente -- pulada)")
+        print("  (exames: recomendacoes_estado_real.csv ausente; pulada)")
         return
     r = pd.read_csv(arq)
     g = [c for c in r.columns if c.startswith("ganho_")]
@@ -374,7 +399,7 @@ def fig_exames(rel: Path, destino: Path) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Figuras do capitulo de resultados.")
     ap.add_argument("--relatorios", default=None,
-                    help="pasta relatorios da rodada (padrao: saida/relatorios)")
+                    help="pasta relatorios da execucao (padrao: saida/relatorios)")
     ap.add_argument("--pastas", nargs=3, default=None,
                     metavar=("IMPUTAR", "INDICADOR", "NATIVO"),
                     help="pastas dos tres tratamentos, dentro de --relatorios")
@@ -388,16 +413,14 @@ def main() -> None:
 
     print(f"lendo {rel}")
     print(f"gravando em {destino}\n")
-    fig_ausencia_por_estagio(destino)
+    fig_ausencia(destino)
     fig_tratamentos(rel, pastas, destino)
-    fig_sem_creatinina(rel, pastas, destino)
     fig_matriz(rel, pastas["Nativo"], destino)
     fig_teto_rotulo(rel, pastas["Nativo"], destino)
     fig_shap(rel, destino)
+    fig_ablacoes(rel, destino)
     fig_comorbidades(rel, destino)
     fig_exames(rel, destino)
-    print("\nAs curvas de sobrevida sao geradas por sobrevida_discordancias.py,")
-    print("e a cascata de exclusao pela triagem.")
 
 
 if __name__ == "__main__":

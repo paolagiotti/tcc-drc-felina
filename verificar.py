@@ -1,14 +1,9 @@
 """
 Conferencia do ambiente e da pasta do projeto, antes de qualquer execucao.
 
-Responde, sem depender de memoria, a quatro perguntas:
-
-  1. Cada arquivo do projeto e o da versao registrada no MANIFESTO.txt?
-     Compara a impressao digital (SHA-256) de cada arquivo com a do manifesto.
-     Arquivo diferente do manifesto foi editado depois dele.
-  2. Ha arquivos sobrando ou faltando na pasta?
-  3. O arquivo de origem e o mesmo usado na execucao final (SHA-256)?
-  4. As bibliotecas estao instaladas nas versoes fixadas em requirements.txt?
+Confere: cada arquivo contra o MANIFESTO.txt (SHA-256); arquivos sobrando ou
+faltando; o SHA-256 do arquivo de origem contra o da execucao final; as versoes
+das bibliotecas contra requirements.txt; e os requisitos da camada interpretativa.
 
 Uso:
     python verificar.py
@@ -126,8 +121,6 @@ for p in sorted(AQUI.iterdir()):
     elif p.name in DADOS_ORIGEM:
         print(f"  --   {p.name}: {DADOS_ORIGEM[p.name]}")
         continue
-    elif p.name == "dicionario_variaveis.csv":
-        aviso("dicionario_variaveis.csv na RAIZ: o codigo usa dados/. Ver secao 4.")
     elif p.suffix == ".zip":
         aviso(f"descartavel: {p.name}")
     else:
@@ -153,37 +146,10 @@ else:
 # ---------------------------------------------------------------------------
 print("\n=== 4. dicionario de variaveis ===")
 d_dados = AQUI / "dados" / "dicionario_variaveis.csv"
-d_raiz = AQUI / "dicionario_variaveis.csv"
-if not d_dados.exists():
-    erro("dados/dicionario_variaveis.csv nao encontrado", "o codigo le desta pasta")
+if d_dados.exists():
+    ok("dados/dicionario_variaveis.csv presente")
 else:
-    ok("dados/dicionario_variaveis.csv presente (e o que o codigo usa)")
-    if d_raiz.exists():
-        try:
-            import pandas as pd
-            a, b = pd.read_csv(d_raiz), pd.read_csv(d_dados)
-            k = a.columns[0]
-            m = a.merge(b, on=k, suffixes=("_raiz", "_dados"))
-            col = "papel" if "papel" in a.columns else a.columns[1]
-            dif = m[m[f"{col}_raiz"].astype(str) != m[f"{col}_dados"].astype(str)]
-            so_raiz = set(a[k]) - set(b[k])
-            so_dados = set(b[k]) - set(a[k])
-            if dif.empty and not so_raiz and not so_dados:
-                aviso("copias sem diferenca na coluna 'papel': diferenca inofensiva "
-                      "para os resultados. A da raiz pode ser apagada.")
-            else:
-                erro(f"copias diferem em 'papel' em {len(dif)} variavel(is) "
-                     f"(e {len(so_raiz) + len(so_dados)} so numa delas); isso muda "
-                     f"os resultados", "decida qual versao vale e apague a outra")
-                for _, r in dif.iterrows():
-                    print(f"         {str(r[k])[:40]:<40} raiz={str(r[f'{col}_raiz']):<18} "
-                          f"dados={r[f'{col}_dados']}")
-                for v in sorted(so_raiz):
-                    print(f"         so na raiz : {v}")
-                for v in sorted(so_dados):
-                    print(f"         so em dados: {v}")
-        except Exception as e:  # noqa: BLE001
-            aviso(f"nao foi possivel comparar as copias: {e}")
+    erro("dados/dicionario_variaveis.csv nao encontrado", "o codigo le desta pasta")
 
 # ---------------------------------------------------------------------------
 print("\n=== 5. bibliotecas ===")
@@ -223,7 +189,6 @@ tem_chave = bool(os.environ.get("OPENAI_API_KEY"))
 # ---------------------------------------------------------------------------
 if "--api" in sys.argv:
     print("\n=== 7. API da OpenAI (chamada real, custo de fracao de centavo) ===")
-    import re
     try:
         sys.path.insert(0, str(AQUI))
         import config as cfg
@@ -236,17 +201,7 @@ if "--api" in sys.argv:
         print(f"  modelo configurado: {modelo} | versao declarada: "
               f"{getattr(cfg, 'VERSAO_LLM', modelo)}")
         passou, msg = testar_acesso()
-        if passou:
-            ok(msg)
-        else:
-            erro(msg)
-            # diagnostico: o nome curto funciona? entao falta so liberar a versao
-            curto = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", modelo)
-            if curto != modelo and os.environ.get("OPENAI_API_KEY"):
-                p2, m2 = testar_acesso(modelo=curto)
-                if p2:
-                    aviso(f"o nome curto '{curto}' funciona: a conta tem acesso. "
-                          f"Falta so liberar '{modelo}' nos modelos permitidos do projeto.")
+        (ok if passou else erro)(msg)
 
 print()
 if problemas:

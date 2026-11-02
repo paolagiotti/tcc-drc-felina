@@ -1,15 +1,16 @@
 """
-Escopo 1: estadiamento IRIS. Executa baselines, modelos e ablacoes.
+Componente de estadiamento: pisos, modelos, ablacoes e validacao aninhada.
 
-Ordem das saidas, a mesma do capitulo de resultados:
-
-  1. baselines  -- piso de comparacao, sem o qual nenhuma metrica significa nada
-  2. modelos    -- desempenho por estimador e por braco de balanceamento
-  3. ablacoes   -- o experimento central: o que se perde sem a creatinina
+Para um tratamento de ausentes (--ausentes), avalia todas as combinacoes de
+conjunto de variaveis, modelo e braco de desbalanceamento nas mesmas particoes,
+compara os conjuntos por ablacao pareada, seleciona modelo e braco dentro do
+conjunto do sistema pelo RPS e grava as predicoes da configuracao do sistema.
+Com --aninhada, estima o desempenho de todo o processo de selecao.
 
 Uso:
-    python experimento_iris.py
-    python experimento_iris.py --conjuntos FULL SEM_CREATININA --bracos peso
+    python experimento_iris.py --ausentes nativo
+    python experimento_iris.py --ausentes nativo --alvo binario --restrito
+    python experimento_iris.py --ausentes nativo --aninhada --sufixo _final_aninhada
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ import config as cfg
 import modelagem as mdl
 
 SAIDA = cfg.SAIDA_RELATORIOS / "escopo1"   # redefinido em main() conforme as opcoes
+BRACOS = ["peso", "nenhum"]
+CRITERIO = "rps"                           # criterio de selecao: regra de pontuacao ordinal
 
 # O IterativeImputer avisa que nao convergiu em 10 iteracoes. Com este numero de
 # registros isso e esperado e nao afeta o resultado; o aviso so polui a saida.
@@ -45,7 +48,7 @@ def _versoes() -> dict:
     import platform
     import sys
     out = {"python": sys.version.split()[0], "plataforma": platform.platform()}
-    for m in ("numpy", "pandas", "sklearn", "imblearn", "xgboost"):
+    for m in ("numpy", "pandas", "sklearn", "xgboost"):
         try:
             out[m] = __import__(m).__version__
         except ImportError:
@@ -55,13 +58,7 @@ def _versoes() -> dict:
 
 def sensibilidade_por_creatinina(df: pd.DataFrame, y: pd.Series,
                                  pred: pd.Series) -> pd.DataFrame:
-    """Acerto por classe, separado pela presenca de creatinina.
-
-    E o recorte que sustenta o achado central do escopo 1: os casos graves sao
-    os que mais frequentemente nao tem creatinina, e e neles que o modelo
-    falha. Gerado automaticamente para que o numero saia da rodada final, e nao
-    de um calculo manual sobre a configuracao que calhou de ser salva.
-    """
+    """Acerto por classe, separado pela presenca de creatinina."""
     tem = df[cfg.COL_CREATININA].notna()
     linhas = []
     for c in av.CLASSES:
@@ -76,13 +73,8 @@ def sensibilidade_por_creatinina(df: pd.DataFrame, y: pd.Series,
 
 
 def decisao_clinica(ps: pd.DataFrame, destino) -> dict:
-    """Desempenho do modelo de QUATRO estagios na decisao clinica binaria.
-
-    Nao e o alvo binario: o modelo e o mesmo, treinado nos quatro estagios. A
-    saida e apenas lida na decisao que o veterinario toma -- manejo de doenca
-    avancada (III-IV) ou nao --, que e onde a conduta muda.
-    """
-    import json
+    """Leitura clinica binaria (avancado, III-IV, ou nao) das predicoes do
+    modelo de quatro estagios."""
     real = ps.iris_registrado.isin([3, 4])
     pred = ps.predito_modelo.isin([3, 4])
     tem = ps.predito_regra.notna()
@@ -103,6 +95,17 @@ def decisao_clinica(ps: pd.DataFrame, destino) -> dict:
         "abrangencia_regra_iris": round(float(tem.mean()), 3),
         "sem_creatinina_sensibilidade": round(
             float((real[q] & pred[q]).sum() / max(real[q].sum(), 1)), 3),
+        # contagens por presenca de creatinina (tabela por tratamento do texto)
+        "avancados_detectados_sem_creatinina": [int((real[q] & pred[q]).sum()), int(real[q].sum())],
+        "avancados_detectados_com_creatinina": [int((real[tem] & pred[tem]).sum()), int(real[tem].sum())],
+        "alarmes_falsos_sem_creatinina": int((~real[q] & pred[q]).sum()),
+        "alarmes_falsos_com_creatinina": int((~real[tem] & pred[tem]).sum()),
+        "estagio4_detectado_sem_creatinina": [
+            int(((ps.iris_registrado == 4) & (ps.predito_modelo == 4) & q).sum()),
+            int(((ps.iris_registrado == 4) & q).sum())],
+        "estagio4_detectado_com_creatinina": [
+            int(((ps.iris_registrado == 4) & (ps.predito_modelo == 4) & tem).sum()),
+            int(((ps.iris_registrado == 4) & tem).sum())],
     }
     (destino / "decisao_clinica_sistema.json").write_text(
         json.dumps(r, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -120,7 +123,7 @@ def _colapsar(s: pd.Series, binario: bool) -> pd.Series:
 
 
 def rodar_baselines(df: pd.DataFrame, y: pd.Series, binario: bool = False) -> pd.DataFrame:
-    """Pisos de comparacao. Nenhuma metrica de modelo significa nada sem isto."""
+    """Pisos de comparacao: classe majoritaria e regra IRIS onde ha creatinina."""
     linhas = []
 
     # 1. classe majoritaria: o modelo preguicoso
@@ -140,12 +143,7 @@ def rodar_baselines(df: pd.DataFrame, y: pd.Series, binario: bool = False) -> pd
 
 def concordancia_regra(df: pd.DataFrame, y: pd.Series,
                        binario: bool = False) -> tuple[pd.DataFrame, dict]:
-    """Tabela de contingencia entre o estagio registrado e a regra aplicada.
-
-    Sustenta a reformulacao do argumento de circularidade: se a concordancia
-    fosse total, o alvo seria funcao deterministica da creatinina e a tarefa
-    seria trivial.
-    """
+    """Contingencia entre o estagio registrado e a regra IRIS aplicada a creatinina."""
     regra = _colapsar(mdl.aplicar_regra_iris(df), binario)
     tem = regra.notna()
     tab = pd.crosstab(y[tem], regra[tem].astype(int),
@@ -161,23 +159,11 @@ def concordancia_regra(df: pd.DataFrame, y: pd.Series,
 
 def rodar_configuracao(df, y, colunas, braco, nome_modelo, splits, tratamento):
     """Avalia uma configuracao (conjunto, modelo, braco, tratamento) nos splits compartilhados."""
-    if tratamento == "nativo":
-        if nome_modelo not in mdl.ACEITAM_AUSENTE:
-            raise ValueError(
-                f"o modelo '{nome_modelo}' nao aceita valores ausentes; "
-                f"use --ausentes imputar ou indicador")
-        if braco == "smote":
-            # O SMOTE interpola entre registros e nao opera com ausentes. A
-            # incompatibilidade e do metodo, nao um defeito da configuracao.
-            raise ValueError(
-                "SMOTE e incompativel com --ausentes nativo: a interpolacao "
-                "exige valores completos. Use ponderacao ou nenhum.")
     num, cat = mdl.separar_tipos(df, colunas)
-    estimador = mdl.estimadores(braco)[nome_modelo]
 
-    def construir(y_treino):
-        return mdl.construir_pipeline(estimador, num, cat, braco, y_treino,
-                                      tratamento)
+    def construir():
+        est = mdl.estimadores(braco)[nome_modelo]
+        return mdl.construir_pipeline(est, num, cat, braco, tratamento)
 
     return av.avaliar(construir, df[num + cat], y, splits)
 
@@ -185,24 +171,13 @@ def rodar_configuracao(df, y, colunas, braco, nome_modelo, splits, tratamento):
 # ---------------------------------------------------------------------------
 
 # Metricas em que MENOR e melhor. Todas as demais sao maximizadas.
-MINIMIZAR = {"rps", "brier_multiclasse", "log_loss"}
+MINIMIZAR = {"rps", "brier_multiclasse"}
 
 
 def validacao_aninhada(df, y, colunas, nomes_mod, bracos, tratamento,
                        criterio: str) -> tuple[pd.DataFrame, pd.Series]:
-    """Estimativa honesta de desempenho, com a selecao dentro do treino.
-
-    O problema que isto corrige: nas execucoes principais, todas as
-    configuracoes sao avaliadas nas mesmas particoes e a melhor e escolhida
-    olhando esses resultados. O numero da vencedora fica otimista, porque a
-    propria validacao participou da selecao.
-
-    Aqui, cada particao externa estima o desempenho de TODO o processo: dentro
-    de sua porcao de treino, uma validacao interna escolhe modelo e braco; o
-    escolhido e reajustado e aplicado a particao externa, nunca observada
-    durante a escolha. Espera-se numero MENOR que o das execucoes principais --
-    essa reducao e o vies que estava embutido.
-    """
+    """Validacao aninhada: em cada particao externa, uma validacao interna no
+    treino escolhe modelo e braco; o escolhido e avaliado na particao externa."""
     from sklearn.model_selection import StratifiedKFold
 
     externo = StratifiedKFold(n_splits=cfg.N_FOLDS, shuffle=True,
@@ -222,54 +197,34 @@ def validacao_aninhada(df, y, colunas, nomes_mod, bracos, tratamento,
         melhor, melhor_valor = None, -np.inf
         for nome_mod in nomes_mod:
             for braco in bracos:
-                if tratamento == "nativo" and (
-                        nome_mod not in mdl.ACEITAM_AUSENTE or braco == "smote"):
-                    continue
-                est = mdl.estimadores(braco)[nome_mod]
-
-                def construir(y_sub, _e=est, _b=braco):
-                    return mdl.construir_pipeline(_e, num, cat, _b, y_sub,
-                                                  tratamento)
-                try:
-                    por_fold, _ = av.avaliar(construir, X_tr, y_tr, interno)
-                except Exception:  # noqa: BLE001
-                    continue
-                if criterio not in por_fold.columns:
-                    continue
+                def construir(_m=nome_mod, _b=braco):
+                    est = mdl.estimadores(_b)[_m]
+                    return mdl.construir_pipeline(est, num, cat, _b, tratamento)
+                por_fold, _ = av.avaliar(construir, X_tr, y_tr, interno)
                 valor = sinal * por_fold[criterio].median()
                 if valor > melhor_valor:
-                    melhor_valor, melhor = valor, (nome_mod, braco, est)
+                    melhor_valor, melhor = valor, (nome_mod, braco)
 
-        if melhor is None:
-            continue
-        nome_mod, braco, est = melhor
-        pipe = mdl.construir_pipeline(est, num, cat, braco, y_tr, tratamento)
+        nome_mod, braco = melhor
+        pipe = mdl.construir_pipeline(mdl.estimadores(braco)[nome_mod], num, cat,
+                                      braco, tratamento)
         pipe.fit(X_tr, y_tr)
         pred = pipe.predict(X.iloc[te])
         pred_externa.iloc[te] = pred
         escolhidas.append(f"{nome_mod}|{braco}")
-        linha = {"particao_externa": i, "escolhida": f"{nome_mod}|{braco}",
-                 "criterio_interno": round(float(sinal * melhor_valor), 4),
-                 **av.metricas(y.iloc[te], pred)}
-        try:
-            linha.update(av.metricas_probabilidade(
-                y.iloc[te], pipe.predict_proba(X.iloc[te]), list(pipe.classes_)))
-        except Exception:  # noqa: BLE001
-            pass
-        linhas.append(linha)
+        linhas.append({"particao_externa": i, "escolhida": f"{nome_mod}|{braco}",
+                       "criterio_interno": round(float(sinal * melhor_valor), 4),
+                       **av.metricas(y.iloc[te], pred),
+                       **av.metricas_probabilidade(
+                           y.iloc[te], pipe.predict_proba(X.iloc[te]),
+                           list(pipe.classes_))})
 
     por_particao = pd.DataFrame(linhas)
     return por_particao, pred_externa
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Escopo 1: estadiamento IRIS.")
-    ap.add_argument("--conjuntos", nargs="*", default=None,
-                    help="subconjunto de conjuntos de variaveis a avaliar")
-    ap.add_argument("--bracos", nargs="*", default=["peso", "smote", "nenhum"])
-    ap.add_argument("--modelos", nargs="*", default=None)
-    ap.add_argument("--sem-cache", action="store_true",
-                    help="desliga o cache de transformadores ajustados")
+    ap = argparse.ArgumentParser(description="Componente de estadiamento.")
     ap.add_argument("--alvo", choices=["quatro", "binario"], default="quatro",
                     help="quatro = estagios I a IV; binario = precoce (I-II) "
                          "contra avancado (III-IV)")
@@ -282,18 +237,11 @@ def main() -> None:
     ap.add_argument("--aninhada", action="store_true",
                     help="validacao aninhada: estima o desempenho de todo o "
                          "processo de selecao, nao apenas do modelo vencedor")
-    ap.add_argument("--criterio-selecao", default="rps",
-                    help="criterio de selecao da validacao aninhada (padrao: rps, "
-                         "regra de pontuacao propria e ordinal)")
-    ap.add_argument("--conjunto-final", default=None,
-                    help="conjunto de variaveis usado na validacao aninhada "
-                         "(padrao: SEM_INDICADORES_EXAME)")
     ap.add_argument("--sufixo", default=None,
                     help="sufixo da pasta de saida; por padrao derivado das opcoes")
     args = ap.parse_args()
 
-    if not args.sem_cache:
-        mdl.ativar_cache(cfg.SAIDA / "cache")
+    mdl.ativar_cache(cfg.SAIDA / "cache")
     t0 = time.time()
 
     print("[1] carregando coorte da etapa 1")
@@ -301,24 +249,21 @@ def main() -> None:
     print(f"  {len(df)} registros | distribuicao: {y.value_counts().sort_index().to_dict()}")
 
     if args.restrito:
-        # A regra IRIS so opera onde ha creatinina. Avaliar o modelo nos 123 e a
-        # regra nos 74 compara populacoes diferentes: o modelo carrega os casos
-        # em que a creatinina foi imputada, que a regra nao teria como estadiar.
+        # So os registros com creatinina, para comparar o modelo com a regra IRIS
+        # na mesma populacao.
         tem = df[cfg.COL_CREATININA].notna()
         df, y = df[tem].copy(), y[tem].copy()
         print(f"  RESTRITO aos registros com creatinina: {len(df)} | "
               f"{y.value_counts().sort_index().to_dict()}")
 
     if args.alvo == "binario":
-        # A fronteira I/II concentra a maior parte dos erros e e borrada no
-        # proprio rotulo. Colapsar testa se o desempenho baixo vem do modelo ou
-        # da granularidade excessiva para o n disponivel.
+        # Precoce (I-II) contra avancado (III-IV): analise diagnostica.
         y = y.map({1: 1, 2: 1, 3: 2, 4: 2})
         print(f"  ALVO BINARIO: 1 = precoce (I-II), 2 = avancado (III-IV) | "
               f"{y.value_counts().sort_index().to_dict()}")
 
     av.definir_classes(y)
-    tratamento = args.ausentes or getattr(cfg, "TRATAMENTO_AUSENTES", "imputar")
+    tratamento = args.ausentes or cfg.TRATAMENTO_AUSENTES
     if tratamento != "imputar":
         print(f"  TRATAMENTO DE AUSENTES: {tratamento}")
     global SAIDA
@@ -349,36 +294,24 @@ def main() -> None:
     splits = av.materializar_splits(df, y)
     print(f"  {len(splits)} folds = {cfg.N_FOLDS} particoes x {cfg.N_REPETICOES} repeticoes")
 
-    nomes_conj = args.conjuntos or [c for c in conjuntos
-                                    if len(conjuntos[c]) >= 3]
-    nomes_mod = args.modelos or list(mdl.estimadores("peso").keys())
+    nomes_conj = [c for c in conjuntos if len(conjuntos[c]) >= 3]
+    nomes_mod = list(mdl.estimadores("peso").keys())
 
-    total = len(nomes_conj) * len(nomes_mod) * len(args.bracos)
+    total = len(nomes_conj) * len(nomes_mod) * len(BRACOS)
     print(f"\n[4] avaliando {len(nomes_conj)} conjuntos x {len(nomes_mod)} modelos "
-          f"x {len(args.bracos)} bracos = {total} configuracoes x {len(splits)} folds")
+          f"x {len(BRACOS)} bracos = {total} configuracoes x {len(splits)} folds")
     feitas = 0
     resumos, todos_folds, oofs = [], {}, {}
 
     for conj in nomes_conj:
         colunas = conjuntos[conj]
         for nome_mod in nomes_mod:
-            for braco in args.bracos:
+            for braco in BRACOS:
                 chave = f"{conj}|{nome_mod}|{braco}"
                 feitas += 1
                 marcha = time.time()
-                try:
-                    por_fold, oof = rodar_configuracao(
-                        df, y, colunas, braco, nome_mod, splits, tratamento)
-                except ValueError as e:
-                    if "incompativel" in str(e) or "nao aceita" in str(e):
-                        print(f"  [{feitas:>2}/{total}] {chave:<52} PULADA: {e}")
-                    else:
-                        print(f"  [{feitas:>2}/{total}] {chave:<52} FALHOU: {e}")
-                    continue
-                except Exception as e:  # noqa: BLE001
-                    print(f"  [{feitas:>2}/{total}] {chave:<52} "
-                          f"FALHOU: {type(e).__name__}: {e}")
-                    continue
+                por_fold, oof = rodar_configuracao(
+                    df, y, colunas, braco, nome_mod, splits, tratamento)
                 r = av.resumir(por_fold)
                 resumos.append({"conjunto": conj, "modelo": nome_mod, "braco": braco,
                                 "n_variaveis": len(colunas), **r.to_dict()})
@@ -405,7 +338,7 @@ def main() -> None:
     print("\n[5] ablacao da creatinina (comparacao pareada, mesmos folds)")
     ablacoes = []
     for nome_mod in nomes_mod:
-        for braco in args.bracos:
+        for braco in BRACOS:
             k_full = f"FULL|{nome_mod}|{braco}"
             for alvo in ("SEM_CREATININA", "SEM_SUBESTADIAMENTO",
                          "SEM_CREATININA_NEM_SUBESTADIAMENTO", "SEM_INDICADORES_EXAME"):
@@ -428,24 +361,16 @@ def main() -> None:
                   f"delta={r['delta_mediano']:+.3f} "
                   f"[{r['delta_min']:+.2f},{r['delta_max']:+.2f}]{marca}")
 
-    # Dois criterios de selecao. A acuracia balanceada pesa igualmente errar um
-    # caso leve e um grave; clinicamente, deixar passar um caso grave e o erro
-    # de maior custo. Quando os dois criterios divergem, a diferenca de acuracia
-    # balanceada costuma estar dentro do ruido entre folds, e a de sensibilidade
-    # na classe grave, nao.
     g = max(av.CLASSES)
     grave, f1_grave = f"sensibilidade_e{g}", f"f1_e{g}"
 
-    # Elegiveis: apenas conjuntos CANDIDATOS a sistema (os controles existem para
-    # medir contribuicao, nunca para serem escolhidos) e apenas configuracoes
-    # cujas probabilidades superam o piso de prever a prevalencia.
-    # O conjunto de variaveis NAO se decide por metrica: foi fixado por argumento
-    # conceitual e arquitetural (config.CONJUNTO_SISTEMA). A selecao aqui escolhe
-    # apenas modelo e braco, dentro do conjunto do sistema.
+    # Elegiveis: so o conjunto do sistema (os controles medem contribuicao, nunca
+    # sao escolhidos) e so configuracoes cujas probabilidades superam o piso da
+    # prevalencia. O conjunto de variaveis e fixado em config.CONJUNTO_SISTEMA;
+    # a selecao escolhe apenas modelo e braco.
     CONTROLES = {"SEM_CREATININA", "SEM_CREATININA_NEM_SUBESTADIAMENTO",
                  "SO_AUSENCIAS", "DEFINIDOR_ESTAGIO", "SUBESTADIAMENTO"}
-    conj_sistema = args.conjunto_final or getattr(
-        cfg, "CONJUNTO_SISTEMA", "SEM_INDICADORES_EXAME")
+    conj_sistema = cfg.CONJUNTO_SISTEMA
     if conj_sistema in set(tabela.conjunto):
         elegiveis = tabela[tabela.conjunto == conj_sistema]
         print(f"\n  selecao restrita ao conjunto do sistema: {conj_sistema}")
@@ -459,76 +384,46 @@ def main() -> None:
             elegiveis = calibradas
     print(f"\n  elegiveis para selecao: {len(elegiveis)} de {len(tabela)} "
           f"(excluidos controles e configuracoes abaixo do piso de calibracao)")
-    # O criterio clinico usa F1 da classe mais grave, nao sensibilidade pura.
-    # Sensibilidade sozinha e maximizada por classificar tudo como grave; o F1
-    # pondera com a precisao e impede essa degeneracao.
-    criterios = {
-        "acuracia_balanceada": elegiveis.sort_values(
-            ["acuracia_balanceada", f1_grave], ascending=False).iloc[0],
-        "rps": elegiveis.sort_values(
-            ["rps", "acuracia_balanceada"], ascending=[True, False]).iloc[0],
-    }
-    print("\n[6] melhor configuracao por criterio: matriz de confusao")
-    escolhas = {}
-    for nome_crit, lin in criterios.items():
-        chave_c = f"{lin['conjunto']}|{lin['modelo']}|{lin['braco']}"
-        escolhas[nome_crit] = chave_c
-        pred_c = av.consolidar_oof(oofs[chave_c])
-        mc_c = av.matriz_confusao(y, pred_c)
-        mc_c.to_csv(SAIDA / f"matriz_confusao_{nome_crit}.csv")
-        print(f"\n  por {nome_crit}: {chave_c}")
-        print(f"    acc_bal={lin['acuracia_balanceada']:.3f}  "
-              f"sens_e{g}={lin[grave]:.2f}  prec_e{g}={lin[f'precisao_e{g}']:.2f}  "
-              f"F1_e{g}={lin[f1_grave]:.2f}")
-        print("    " + mc_c.to_string().replace("\n", "\n    "))
+    lin = elegiveis.sort_values(["rps", "acuracia_balanceada"],
+                                ascending=[True, False]).iloc[0]
+    chave_c = f"{lin['conjunto']}|{lin['modelo']}|{lin['braco']}"
+    print(f"\n[6] configuracao selecionada pelo RPS: {chave_c}")
+    pred_c = av.consolidar_oof(oofs[chave_c])
+    mc_c = av.matriz_confusao(y, pred_c)
+    mc_c.to_csv(SAIDA / "matriz_confusao_rps.csv")
+    print(f"    acc_bal={lin['acuracia_balanceada']:.3f}  "
+          f"sens_e{g}={lin[grave]:.2f}  prec_e{g}={lin[f'precisao_e{g}']:.2f}  "
+          f"F1_e{g}={lin[f1_grave]:.2f}")
+    print("    " + mc_c.to_string().replace("\n", "\n    "))
+    if not args.restrito:
+        spc = sensibilidade_por_creatinina(df, y, pred_c)
+        spc.to_csv(SAIDA / "sensibilidade_por_creatinina_rps.csv", index=False)
+        recorte = spc[spc.classe == max(av.CLASSES)]
+        print("    classe mais grave, por presenca de creatinina:")
+        for _, r in recorte.iterrows():
+            if r["n"]:
+                print(f"      {r['grupo']:<16} {r['acertos']:>2}/{r['n']:<2} "
+                      f"({r['sensibilidade']:.0%})")
 
-        if not args.restrito:
-            spc = sensibilidade_por_creatinina(df, y, pred_c)
-            spc.to_csv(SAIDA / f"sensibilidade_por_creatinina_{nome_crit}.csv", index=False)
-            recorte = spc[spc.classe == max(av.CLASSES)]
-            print(f"    classe mais grave, por presenca de creatinina:")
-            for _, r in recorte.iterrows():
-                if r["n"]:
-                    print(f"      {r['grupo']:<16} {r['acertos']:>2}/{r['n']:<2} "
-                          f"({r['sensibilidade']:.0%})")
-
-    if escolhas["acuracia_balanceada"] != escolhas["rps"]:
-        print("\n  OS CRITERIOS DIVERGEM. O criterio declarado e o RPS; a acuracia")
-        print("  balanceada e reportada como referencia.")
-
-    melhor = criterios["acuracia_balanceada"]
-    chave = escolhas["acuracia_balanceada"]
-    pred = av.consolidar_oof(oofs[chave])
-    mc = av.matriz_confusao(y, pred)
-    mc.to_csv(SAIDA / "matriz_confusao_melhor.csv")
-
-    # --- predicoes da configuracao DO SISTEMA, explicitamente ---
-    cs = getattr(cfg, "CONFIGURACAO_SISTEMA", None)
-    if cs:
-        chave_sis = f"{cs['conjunto']}|{cs['modelo']}|{cs['braco']}"
-        if chave_sis in oofs:
-            pred_sis = av.consolidar_oof(oofs[chave_sis])
-            ps = pd.DataFrame({
-                cfg.COL_ID: df[cfg.COL_ID] if cfg.COL_ID in df.columns else df.index,
-                "iris_registrado": y,
-                "predito_modelo": pred_sis.astype("Int64"),
-                "predito_regra": mdl.aplicar_regra_iris(df),
-            })
-            ps.to_csv(SAIDA / "predicoes_sistema.csv", index=False)
-            if not args.restrito and args.alvo == "quatro":
-                decisao_clinica(ps, SAIDA)
-            print(f"\n  predicoes do SISTEMA gravadas: {chave_sis}")
-        else:
-            print(f"\n  AVISO: a configuracao do sistema ({chave_sis}) nao foi")
-            print("  avaliada nesta execucao; predicoes_sistema.csv nao gerado.")
-
-    saida_pred = pd.DataFrame({
-        cfg.COL_ID: df[cfg.COL_ID] if cfg.COL_ID in df.columns else df.index,
-        "iris_registrado": y,
-        "predito_modelo": pred.astype("Int64"),
-        "predito_regra": mdl.aplicar_regra_iris(df),
-    })
-    saida_pred.to_csv(SAIDA / "predicoes_fora_de_amostra.csv", index=False)
+    # Predicoes da configuracao do sistema (config.CONFIGURACAO_SISTEMA): e delas
+    # que saem as analises descritivas.
+    cs = cfg.CONFIGURACAO_SISTEMA
+    chave_sis = f"{cs['conjunto']}|{cs['modelo']}|{cs['braco']}"
+    if chave_sis in oofs:
+        pred_sis = av.consolidar_oof(oofs[chave_sis])
+        ps = pd.DataFrame({
+            cfg.COL_ID: df[cfg.COL_ID] if cfg.COL_ID in df.columns else df.index,
+            "iris_registrado": y,
+            "predito_modelo": pred_sis.astype("Int64"),
+            "predito_regra": mdl.aplicar_regra_iris(df),
+        })
+        ps.to_csv(SAIDA / "predicoes_sistema.csv", index=False)
+        if not args.restrito and args.alvo == "quatro":
+            decisao_clinica(ps, SAIDA)
+        print(f"\n  predicoes do sistema gravadas: {chave_sis}")
+    else:
+        print(f"\n  AVISO: a configuracao do sistema ({chave_sis}) nao foi")
+        print("  avaliada nesta execucao; predicoes_sistema.csv nao gerado.")
 
     (SAIDA / "execucao.json").write_text(json.dumps({
         "executado_em": datetime.now().isoformat(timespec="seconds"),
@@ -537,42 +432,17 @@ def main() -> None:
         "alvo": args.alvo, "restrito_a_creatinina": bool(args.restrito),
         "tratamento_ausentes": tratamento,
         "n_avaliado": int(len(df)),
-        "conjuntos": nomes_conj, "modelos": nomes_mod, "bracos": args.bracos,
-        "melhor_configuracao": chave,
-        "melhor_por_criterio": escolhas,
+        "conjuntos": nomes_conj, "modelos": nomes_mod, "bracos": BRACOS,
+        "selecionada_rps": chave_c,
         "versoes": _versoes(),
         "concordancia_regra": resumo_conc,
     }, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    # Calibracao: o escopo 3 pontua exames pela reducao de entropia das
-    # distribuicoes preditas. Se as probabilidades nao superarem o piso de
-    # prever a prevalencia, a entropia nao tem significado utilizavel.
-    if "brier_multiclasse" in tabela.columns:
-        print("\n[7] calibracao das probabilidades (Brier multiclasse, menor e melhor)")
-        for nome_crit, chave_c in escolhas.items():
-            achado = tabela[(tabela.conjunto + "|" + tabela.modelo + "|"
-                             + tabela.braco) == chave_c]
-            if achado.empty:
-                continue
-            lin = achado.iloc[0]
-            b, p = lin["brier_multiclasse"], lin["brier_piso_prevalencia"]
-            print(f"  {chave_c}")
-            print(f"    Brier={b:.3f}  piso(prevalencia)={p:.3f}  "
-                  f"reducao={(p - b) / p:+.1%}  log_loss={lin.get('log_loss'):.3f}")
-            if b >= p:
-                print("    ATENCAO: nao supera o piso. As probabilidades nao tem")
-                print("    significado utilizavel; o escopo 3 nao pode apoiar-se nelas.")
-
     if args.aninhada:
-        conj_final = args.conjunto_final or getattr(
-            cfg, "CONJUNTO_SISTEMA", "SEM_INDICADORES_EXAME")
-        if conj_final not in conjuntos:
-            conj_final = "FULL"
-        crit = args.criterio_selecao
-        print(f"\n[8] validacao aninhada sobre {conj_final}")
-        print(f"  criterio de selecao interna: {crit}")
+        conj_final = cfg.CONJUNTO_SISTEMA
+        print(f"\n[7] validacao aninhada sobre {conj_final} (criterio interno: {CRITERIO})")
         por_part, pred_an = validacao_aninhada(
-            df, y, conjuntos[conj_final], nomes_mod, args.bracos, tratamento, crit)
+            df, y, conjuntos[conj_final], nomes_mod, BRACOS, tratamento, CRITERIO)
         if por_part.empty:
             print("  nenhuma particao concluida.")
         else:
@@ -587,36 +457,14 @@ def main() -> None:
                     f"sensibilidade_e{max(av.CLASSES)}",
                     f"precisao_e{max(av.CLASSES)}", "rps", "brier_multiclasse"]
             est = por_part[[c for c in cols if c in por_part.columns]]
-            print("\n  ESTIMATIVA HONESTA (mediana entre particoes externas):")
+            print("\n  estimativa aninhada (mediana entre particoes externas):")
             for c in est.columns:
                 print(f"    {c:<26} {est[c].median():.3f} "
                       f"[{est[c].min():.2f}-{est[c].max():.2f}]")
-            # Referencia correta: a MESMA configuracao que a selecao escolheu,
-            # avaliada sem aninhamento. Comparar com outra configuracao mede
-            # diferenca entre modelos, nao vies de selecao.
-            mais_escolhida = por_part["escolhida"].value_counts().idxmax()
-            chave_ref = f"{conj_final}|{mais_escolhida}"
-            ref = tabela[(tabela.conjunto + "|" + tabela.modelo + "|" + tabela.braco)
-                         == chave_ref]
-            if not ref.empty:
-                o = ref.iloc[0]["acuracia_balanceada"]
-                d = o - est["acuracia_balanceada"].median()
-                print(f"\n    {chave_ref} sem aninhamento: {o:.3f}")
-                print(f"    diferenca (sem aninhamento - aninhada): {d:+.3f}")
-                print("    Ressalva: a aninhada usa 5 particoes externas unicas; a")
-                print("    avaliacao principal usa 15 (5 x 3 repeticoes). Com n=123,")
-                print("    diferencas desta ordem estao dentro da variacao entre")
-                print("    particoes e nao devem ser lidas como vies.")
             esc = por_part["escolhida"].value_counts()
-            print(f"\n    configuracoes escolhidas nas particoes: {esc.to_dict()}")
-            if len(esc) > 1:
-                print("    A selecao NAO e estavel entre particoes: a escolha de")
-                print("    modelo/braco depende dos dados de treino, o que reforca")
-                print("    que a diferenca entre candidatos esta dentro do ruido.")
+            print(f"    configuracoes escolhidas nas particoes: {esc.to_dict()}")
 
     print(f"\nsaidas em {SAIDA}  |  tempo total: {(time.time() - t0)/60:.1f} min")
-    print("\nLEITURA: nenhuma metrica isolada significa desempenho. Compare sempre")
-    print("contra os baselines do passo [2], e reporte a faixa entre folds, nao a mediana.")
 
 
 if __name__ == "__main__":
