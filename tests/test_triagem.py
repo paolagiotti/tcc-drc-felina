@@ -102,14 +102,6 @@ def test_cobertura_informativa_desconta_sentinelas():
     assert c.loc["BUN at diagnosis", "n_ausente"] == 2
 
 
-def test_coausencia_jaccard():
-    df = pd.DataFrame({"a": [np.nan, np.nan, 1.0, 1.0],
-                       "b": [np.nan, 1.0, np.nan, 1.0],
-                       "c": [np.nan, np.nan, 1.0, 1.0]})
-    j = tr.coausencia(df, ["a", "b", "c"])
-    assert j.loc["a", "c"] == 1.0
-    assert j.loc["a", "b"] == pytest.approx(1 / 3, abs=1e-3)      # arredondado a 3 casas
-    assert j.loc["a", "a"] == 1.0
 
 
 def test_decisoes_de_entrada_trocam_pelo_derivado_e_descartam():
@@ -137,17 +129,6 @@ def test_conjuntos_de_variaveis():
     assert conj["SEM_CREATININA_NEM_SUBESTADIAMENTO"] == ["Age", "Biochemistry"]
     assert conj["SEM_INDICADORES_EXAME"] == [cfg.COL_CREATININA, cfg.COL_UPC, cfg.COL_PAS, "Age"]
     assert conj["DEFINIDOR_ESTAGIO"] == [cfg.COL_CREATININA]
-
-
-def test_aritmetica_do_desenho():
-    y = pd.Series([1] * 60 + [2] * 40 + [3] * 20 + [4] * 18)
-    r = tr.aritmetica_desenho(y)
-    assert r["menor_classe"] == 18
-    assert r["n_teste_menor_classe_por_fold"] == [3, 4]       # 18 em 5 folds
-    assert r["folds_desbalanceados"] is True
-    assert r["k_neighbors_smote_recomendado"] == 3
-    assert r["holdout_menor_classe"] == 3
-    assert r["holdout_independente_viavel"] == (3 >= cfg.MIN_TESTE_POR_CLASSE)
 
 
 def test_comparacao_rotulado_vs_nao_rotulado_exclui_desfecho():

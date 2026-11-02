@@ -1,14 +1,8 @@
 """
-Auditoria das colunas do arquivo de origem.
-
-Motivo de existir: uma coluna pode ser usada, descartada ou derivada de forma
-errada sem que nada falhe. O codigo roda, os numeros saem, e o defeito so
-aparece se alguem abrir a coluna e olhar. Foi o que aconteceu com a hipertensao
--- ela tem qualificador temporal em formato de data, o pipeline so sabe tratar
-qualificador em texto, e ela foi descartada inteira sem nenhum aviso.
-
-Este script inspeciona TODAS as colunas e emite alertas do que merece conferencia
-humana. Nao decide nada: aponta.
+Auditoria das colunas do arquivo de origem: aponta valores fora de faixa,
+sentinelas textuais, rotulos ambiguos e qualificadores temporais nao
+aproveitados (em texto ou em data). Nao decide nada: lista o que exige
+conferencia humana.
 
 Uso:
     python auditar_colunas.py
@@ -49,7 +43,7 @@ def perfilar(s: pd.Series, nome: str, papel: str, rot: pd.Series) -> dict:
             r["min"], r["mediana"], r["max"] = (round(float(v.min()), 3),
                                                 round(float(v.median()), 3),
                                                 round(float(v.max()), 3))
-            faixa = getattr(cfg, "FAIXAS_PLAUSIVEIS", {}).get(nome)
+            faixa = cfg.FAIXAS_PLAUSIVEIS.get(nome)
             if faixa:
                 fora = int(((v < faixa[0]) | (v > faixa[1])).sum())
                 if fora:
@@ -82,17 +76,10 @@ def perfilar(s: pd.Series, nome: str, papel: str, rot: pd.Series) -> dict:
 
 
 def achar_qualificadores(bruto: pd.DataFrame, papeis: dict) -> pd.DataFrame:
-    """Colunas com qualificador temporal, classificadas por situacao.
-
-    Dois formatos aparecem no arquivo: texto ("Before CKD diagnosis") e data
-    ("Date hypertension diagnosed"). O pipeline trata o primeiro; o segundo
-    passou despercebido ate esta auditoria, e foi assim que a hipertensao acabou
-    descartada inteira em vez de derivada.
-
-    A saida separa o que ja esta resolvido do que exige decisao, para que a lista
-    seja curta o suficiente para ser lida.
-    """
-    tratados = {q for _, q in getattr(cfg, "PARES_TEMPORAIS", [])}
+    """Colunas com qualificador temporal (texto, como "Before CKD diagnosis", ou
+    data), classificadas por situacao: ja derivada, terapia, marcada no
+    dicionario ou a conferir."""
+    tratados = {q for _, q in cfg.PARES_TEMPORAIS}
     linhas = []
     for c in bruto.columns:
         v = bruto[c].astype(str)
@@ -165,6 +152,7 @@ def main() -> None:
             print("  ou se declara por que nao. Silencio nao e decisao.")
 
     t["alertas"] = t.alertas.map(lambda a: " | ".join(a))
+    SAIDA.mkdir(parents=True, exist_ok=True)
     t.to_csv(SAIDA / "auditoria_colunas.csv", index=False)
     if not q.empty:
         q.to_csv(SAIDA / "auditoria_qualificadores.csv", index=False)
