@@ -20,9 +20,6 @@ def test_metricas_de_ranqueamento_calculadas_a_mao():
     # gato 2: ordem b, c, a -> presentes nas posicoes 1 e 3: P@1 = 1, AP = (1 + 2/3) / 2
     assert r["p_at_1"] == 1.0
     assert r["map"] == pytest.approx((1.0 + (1 + 2 / 3) / 2) / 2)
-    assert r["recall_at_1"] == pytest.approx(0.5)
-    assert r["recall_at_2"] == pytest.approx((1.0 + 0.5) / 2)
-    assert r["recall_at_3"] == 1.0
     assert 0 < r["ndcg"] <= 1
 
 

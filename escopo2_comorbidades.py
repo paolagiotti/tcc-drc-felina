@@ -1,28 +1,11 @@
 """
-Escopo 2: ranqueamento de comorbidades.
+Componente de recomendacao, saida 1: ranqueamento de comorbidades.
 
-Para cada gato, estima a probabilidade de cada uma das quatro comorbidades
-modelaveis e as ordena. A saida para o veterinario e uma lista priorizada: "neste
-caso, investigar primeiro hipertireoidismo, depois doenca periodontal...".
-
-Desenho, e por que:
-
-- COORTE: os 618 registros que satisfazem os criterios de inclusao, sem exigir
-  estagio IRIS. As comorbidades nao dependem do estagio, e exigir o estagio
-  descartaria 80% dos dados sem motivo.
-- ALVOS: presenca ANTERIOR ou simultanea ao diagnostico de DRC (versao _pre).
-  Presenca posterior seria informacao do futuro.
-- ENTRADAS: as mesmas 18 variaveis do estadiamento. O mesmo tratamento nativo de
-  ausentes e o mesmo braco sem correcao de desbalanceamento, pelo mesmo motivo:
-  o ranqueamento usa as PROBABILIDADES, e elas precisam ser calibradas.
-- DUAS FORMULACOES, ambas previstas na metodologia:
-    independente -- um classificador por comorbidade (Binary Relevance);
-    cadeia       -- cada classificador recebe as comorbidades anteriores da
-                    cadeia como entrada (Classifier Chain). Testa se a
-                    coocorrencia entre comorbidades carrega informacao.
-- PISO: ordenar pela prevalencia de cada comorbidade na particao de treino --
-  a mesma ordem para todos os gatos. O ranqueamento personalizado so se
-  justifica se superar essa ordem fixa.
+Coorte de 618 gatos (mesmos criterios, sem exigir estagio); alvos sao as quatro
+comorbidades na versao anterior ou simultanea ao diagnostico; entradas, as
+variaveis do sistema, com tratamento nativo e sem correcao de desbalanceamento
+(o ranqueamento usa as probabilidades). Um classificador por comorbidade
+(relevancia binaria), contra o piso da ordem por prevalencia do treino.
 
 Uso:
     python escopo2_comorbidades.py
@@ -30,7 +13,6 @@ Uso:
 
 from __future__ import annotations
 
-import argparse
 import json
 import warnings
 from datetime import datetime
@@ -83,7 +65,7 @@ def _estrato(df: pd.DataFrame, alvos: list[str]) -> pd.Series:
 def _pipe(num, cat):
     """Pipeline do sistema (gradiente, sem correcao de desbalanceamento, ausentes nativos)."""
     est = mdl.estimadores("nenhum")["gradiente"]
-    return mdl.construir_pipeline(est, num, cat, "nenhum", None, "nativo")
+    return mdl.construir_pipeline(est, num, cat, "nenhum", "nativo")
 
 
 def _prob_pos(pipe, X) -> np.ndarray:
@@ -101,26 +83,6 @@ def ajustar_independente(Xtr, Ytr, Xte, entradas):
         pipe.fit(Xtr[num + cat], Ytr[a])
         saida[a] = _prob_pos(pipe, Xte[num + cat])
     return pd.DataFrame(saida, index=Xte.index)
-
-
-def ajustar_cadeia(Xtr, Ytr, Xte, entradas, ordem):
-    """Classifier Chain.
-
-    No treino, cada elo recebe os valores REAIS das comorbidades anteriores; no
-    teste, as PROBABILIDADES preditas por elas. E a formulacao padrao, e evita
-    que o teste use informacao que nao existiria no uso real.
-    """
-    Xtr = Xtr.copy(); Xte = Xte.copy()
-    saida = {}
-    for a in ordem:
-        num, cat = mdl.separar_tipos(Xtr, entradas + [c for c in ordem
-                                                       if c in saida])
-        pipe = _pipe(num, cat)
-        pipe.fit(Xtr[num + cat], Ytr[a])
-        saida[a] = _prob_pos(pipe, Xte[num + cat])
-        Xtr[a] = Ytr[a].astype(float)
-        Xte[a] = saida[a]
-    return pd.DataFrame(saida, index=Xte.index)[list(Ytr.columns)]
 
 
 # ---------------------------------------------------------------------------
@@ -143,21 +105,13 @@ def metricas_por_alvo(Y, P, prev_treino) -> dict:
 
 
 def metricas_ranking(Y, P) -> dict:
-    """Qualidade da ORDEM das comorbidades, por gato.
-
-    Avaliada apenas nos gatos com ao menos uma comorbidade -- sem nenhuma, nao ha
-    ordem a acertar.
-
-    - acerto no topo (P@1): a comorbidade ranqueada em primeiro esta presente.
-    - MAP: precisao media ao longo da lista; premia colocar as presentes no alto.
-    """
+    """Qualidade da ordem das comorbidades por gato (so gatos com ao menos
+    uma): acerto na primeira posicao, MAP e NDCG."""
     tem = Y.sum(axis=1) > 0
     Yv, Pv = Y[tem].values, P[tem].values
     if len(Yv) == 0:
         return {}
     topo, ap, ndcg = [], [], []
-    rec = {k: [] for k in (1, 2, 3)}
-    prec = {k: [] for k in (1, 2, 3)}
     for y, p in zip(Yv, Pv):
         ordem = np.argsort(-p, kind="stable")
         topo.append(y[ordem[0]])
@@ -171,29 +125,16 @@ def metricas_ranking(Y, P) -> dict:
         dcg = sum(y[idx] / np.log2(k + 1) for k, idx in enumerate(ordem, 1))
         ideal = sum(1 / np.log2(k + 1) for k in range(1, int(y.sum()) + 1))
         ndcg.append(dcg / ideal)
-        # Recall@K e Precision@K, com K ate 3: com quatro rotulos, K maior
-        # seria trivial (K=4 recupera tudo)
-        for k in (1, 2, 3):
-            topk = y[ordem[:k]]
-            rec[k].append(topk.sum() / y.sum())
-            prec[k].append(topk.sum() / k)
-    r = {"p_at_1": float(np.mean(topo)), "map": float(np.mean(ap)),
-         "ndcg": float(np.mean(ndcg)), "n_com_alguma": int(tem.sum())}
-    for k in (1, 2, 3):
-        r[f"recall_at_{k}"] = float(np.mean(rec[k]))
-        r[f"precision_at_{k}"] = float(np.mean(prec[k]))
-    return r
+    return {"p_at_1": float(np.mean(topo)), "map": float(np.mean(ap)),
+            "ndcg": float(np.mean(ndcg)), "n_com_alguma": int(tem.sum())}
 
 
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Escopo 2: comorbidades.")
-    ap.add_argument("--repeticoes", type=int, default=cfg.N_REPETICOES)
-    args = ap.parse_args()
     SAIDA.mkdir(parents=True, exist_ok=True)
 
-    print("[1] carregando coorte do escopo 2")
+    print("[1] carregando coorte das comorbidades")
     df, entradas, alvos = carregar()
     print(f"  {len(df)} registros | {len(entradas)} variaveis de entrada")
     for a in alvos:
@@ -201,16 +142,13 @@ def main() -> None:
     n_com = int((df[alvos].sum(axis=1) > 0).sum())
     print(f"  com ao menos uma comorbidade: {n_com} ({n_com/len(df):.0%})")
 
-    ordem_prev = list(df[alvos].mean().sort_values(ascending=False).index)
-    print(f"  ordem da cadeia (por prevalencia): {[a.replace('_pre','') for a in ordem_prev]}")
-
-    cv = RepeatedStratifiedKFold(n_splits=cfg.N_FOLDS, n_repeats=args.repeticoes,
+    cv = RepeatedStratifiedKFold(n_splits=cfg.N_FOLDS, n_repeats=cfg.N_REPETICOES,
                                  random_state=cfg.SEMENTE)
     splits = list(cv.split(df, _estrato(df, alvos)))
-    print(f"\n[2] {len(splits)} particoes ({cfg.N_FOLDS} x {args.repeticoes})")
+    print(f"\n[2] {len(splits)} particoes ({cfg.N_FOLDS} x {cfg.N_REPETICOES})")
 
     linhas = []
-    oof = {k: [] for k in ("independente", "cadeia", "prevalencia")}
+    oof = {k: [] for k in ("independente", "prevalencia")}
     for i, (tr, te) in enumerate(splits, 1):
         Xtr, Xte = df.iloc[tr], df.iloc[te]
         Ytr, Yte = df.iloc[tr][alvos], df.iloc[te][alvos]
@@ -218,7 +156,6 @@ def main() -> None:
 
         preds = {
             "independente": ajustar_independente(Xtr, Ytr, Xte, entradas),
-            "cadeia": ajustar_cadeia(Xtr, Ytr, Xte, entradas, ordem_prev),
             "prevalencia": pd.DataFrame({a: np.full(len(te), prev[a])
                                          for a in alvos}, index=Xte.index),
         }
@@ -239,20 +176,17 @@ def main() -> None:
         return (s.median(), s.min(), s.max()) if len(s) else (np.nan,) * 3
 
     print("[3] discriminacao por comorbidade (AUC-ROC; 0,5 = acaso)")
-    print(f"    {'comorbidade':<22}{'independente':>20}{'cadeia':>20}")
     resumo = []
     for a in alvos:
-        mi, ci = med(f"auc_{a}", "independente"), med(f"auc_{a}", "cadeia")
+        form = "independente"
+        m_auc, m_ap = med(f"auc_{a}", form), med(f"ap_{a}", form)
+        m_b, m_bp = med(f"brier_{a}", form), med(f"brier_piso_{a}", form)
         nome = a.replace("_pre", "")
-        print(f"    {nome:<22}{mi[0]:>8.3f} [{mi[1]:.2f}-{mi[2]:.2f}]"
-              f"{ci[0]:>8.3f} [{ci[1]:.2f}-{ci[2]:.2f}]")
-        for form in ("independente", "cadeia"):
-            m_auc, m_ap = med(f"auc_{a}", form), med(f"ap_{a}", form)
-            m_b, m_bp = med(f"brier_{a}", form), med(f"brier_piso_{a}", form)
-            resumo.append({"comorbidade": nome, "formulacao": form,
-                           "auc": m_auc[0], "auc_min": m_auc[1], "auc_max": m_auc[2],
-                           "ap": m_ap[0], "prevalencia": med(f"prevalencia_{a}", form)[0],
-                           "brier": m_b[0], "brier_piso": m_bp[0]})
+        print(f"    {nome:<22}{m_auc[0]:>8.3f} [{m_auc[1]:.2f}-{m_auc[2]:.2f}]")
+        resumo.append({"comorbidade": nome, "formulacao": form,
+                       "auc": m_auc[0], "auc_min": m_auc[1], "auc_max": m_auc[2],
+                       "ap": m_ap[0], "prevalencia": med(f"prevalencia_{a}", form)[0],
+                       "brier": m_b[0], "brier_piso": m_bp[0]})
 
     print("\n[4] calibracao por comorbidade (Brier; deve ser menor que o piso)")
     r = pd.DataFrame(resumo)
@@ -262,11 +196,10 @@ def main() -> None:
               f"  (AP {x.ap:.3f} vs prevalencia {x.prevalencia:.3f}){marca}")
 
     print("\n[5] qualidade do RANQUEAMENTO (gatos com ao menos uma comorbidade)")
-    metr_rk = ["p_at_1", "map", "ndcg", "recall_at_1", "recall_at_2",
-               "recall_at_3", "precision_at_2", "precision_at_3"]
+    metr_rk = ["p_at_1", "map", "ndcg"]
     print(f"    {'formulacao':<14}" + "".join(f"{m:>15}" for m in metr_rk))
     rk = []
-    for form in ("prevalencia", "independente", "cadeia"):
+    for form in ("prevalencia", "independente"):
         lin = {"formulacao": form}
         txt = f"    {form:<14}"
         for m in metr_rk:
@@ -279,9 +212,9 @@ def main() -> None:
     # comparacao pareada contra o piso
     print("\n[6] ganho sobre o piso de prevalencia (pareado, mesmas particoes)")
     base = t[t.formulacao == "prevalencia"].set_index("particao")
-    for form in ("independente", "cadeia"):
+    for form in ("independente",):
         f = t[t.formulacao == form].set_index("particao")
-        for m in ("map", "ndcg", "p_at_1", "recall_at_2"):
+        for m in ("map", "ndcg", "p_at_1"):
             d = (f[m] - base[m]).dropna()
             zero = " (faixa inclui zero)" if d.min() <= 0 <= d.max() else ""
             print(f"    {form:<14}{m:<8} delta={d.median():+.3f} "
@@ -291,8 +224,7 @@ def main() -> None:
     r.to_csv(SAIDA / "resumo_por_comorbidade.csv", index=False)
     pd.DataFrame(rk).to_csv(SAIDA / "resumo_ranqueamento.csv", index=False)
 
-    # probabilidades fora da amostra, media das repeticoes -- insumo da camada
-    # interpretativa: a lista priorizada de cada gato
+    # probabilidades fora da amostra (media das repeticoes): insumo das fichas
     P = (pd.concat(oof["independente"]).groupby(level=0).mean()
          .drop(columns="_rep").reindex(df.index))
     P.columns = [c.replace("_pre", "") for c in P.columns]
@@ -307,7 +239,7 @@ def main() -> None:
         "executado_em": datetime.now().isoformat(timespec="seconds"),
         "n": len(df), "alvos": alvos, "entradas": cfg.CONJUNTO_SISTEMA,
         "tratamento_ausentes": "nativo", "braco": "nenhum",
-        "particoes": len(splits), "ordem_cadeia": ordem_prev,
+        "particoes": len(splits),
     }, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\nsaidas em {SAIDA}")
 
