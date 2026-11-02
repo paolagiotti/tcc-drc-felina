@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Rodada final: gera, numa execucao unica e limpa, todos os numeros do escopo 1.
+# Execucao final: roda a cadeia inteira numa execucao unica e limpa e copia as
+# saidas, os scripts e o manifesto para entregas/rodada_final_<data e hora>/.
+# Os numeros do texto saem dessa pasta, e de nenhuma outra execucao.
 #
 # Uso:  bash rodada_final.sh
-#
-# Apaga o cache, roda a triagem e os quatro modos do experimento, e copia tudo
-# para uma pasta com data e hora. Os numeros do TCC devem sair daqui, e de
-# nenhuma outra execucao.
 set -euo pipefail
 
 # Interpretador: python3.11 no PATH, ou o caminho dado na variavel PYTHON.
@@ -19,9 +17,11 @@ echo "== conferindo pasta, arquivos e bibliotecas =="
 #  a rodada se algum arquivo estiver fora do manifesto ou faltando)
 
 echo "== limpando saidas regeraveis =="
-# limpa todas as saidas regeraveis (preserva as respostas pagas da camada)
-bash limpar.sh --executar >/dev/null
-# (as 13 execucoes abaixo gravam em pastas distintas, por alvo, restricao e tratamento)
+# (preserva as respostas pagas em saida/relatorios/camada)
+rm -rf saida/cache saida/base saida/relatorios/escopo1* saida/relatorios/escopo2 \
+       saida/relatorios/escopo3 saida/figuras/tcc saida/relatorios/camada/prompts \
+       saida/relatorios/camada/fichas.jsonl
+mkdir -p saida/relatorios
 
 echo "== auditoria das colunas de origem =="
 # Aponta colunas com sentinela, valor fora de faixa ou qualificador temporal nao
@@ -31,58 +31,33 @@ echo "== auditoria das colunas de origem =="
 echo "== etapa 1: triagem =="
 "$PY" triagem.py
 
-# Duas configuracoes vao para o texto, e por isso os dois tratamentos de
-# ausentes precisam ser gerados:
-#   - principal: gradient boosting com tratamento nativo
-#   - referencia interpretavel: regressao logistica com imputacao
-# O tratamento nativo nao admite SMOTE (exige valores completos para
-# interpolar) nem regressao logistica (nao aceita ausentes).
+# Estadiamento: cada tratamento de ausentes em quatro modos (quatro estagios ou
+# binario; coorte completa ou so os gatos com creatinina).
 
-echo "== escopo 1, tratamento IMPUTADO: quatro modos =="
+echo "== estadiamento, tratamento IMPUTADO: quatro modos =="
 "$PY" experimento_iris.py --ausentes imputar
 "$PY" experimento_iris.py --ausentes imputar --alvo binario
 "$PY" experimento_iris.py --ausentes imputar --restrito
 "$PY" experimento_iris.py --ausentes imputar --restrito --alvo binario
 
-echo "== escopo 1, tratamento NATIVO: quatro modos =="
-"$PY" experimento_iris.py --ausentes nativo --modelos floresta gradiente --bracos peso nenhum
-"$PY" experimento_iris.py --ausentes nativo --modelos floresta gradiente --bracos peso nenhum --alvo binario
-"$PY" experimento_iris.py --ausentes nativo --modelos floresta gradiente --bracos peso nenhum --restrito
-"$PY" experimento_iris.py --ausentes nativo --modelos floresta gradiente --bracos peso nenhum --restrito --alvo binario
+echo "== estadiamento, tratamento NATIVO: quatro modos =="
+"$PY" experimento_iris.py --ausentes nativo
+"$PY" experimento_iris.py --ausentes nativo --alvo binario
+"$PY" experimento_iris.py --ausentes nativo --restrito
+"$PY" experimento_iris.py --ausentes nativo --restrito --alvo binario
 
-echo "== escopo 1, validacao aninhada (estimativa honesta) =="
-# Estima o desempenho de TODO o processo de selecao, nao apenas da configuracao
-# vencedora. E o numero a reportar como resultado do trabalho.
-"$PY" experimento_iris.py --ausentes nativo --modelos floresta gradiente \
-    --bracos peso nenhum --aninhada --criterio-selecao rps --sufixo _final_aninhada
+echo "== estadiamento, validacao aninhada =="
+# Estima o desempenho de todo o processo de selecao: e o numero reportado.
+"$PY" experimento_iris.py --ausentes nativo --aninhada --sufixo _final_aninhada
 
-if [ "${PARCIMONIA_ANINHADA:-0}" = "1" ]; then
-    echo "== escopo 1, validacao aninhada dos conjuntos parcimoniosos =="
-    # Teste de parcimonia (conjuntos de Bradley et al., 2019): analise
-    # complementar, declarada como tal no texto. So roda com
-    # PARCIMONIA_ANINHADA=1 bash rodada_final.sh
-    "$PY" experimento_iris.py --ausentes nativo --modelos floresta gradiente \
-        --bracos peso nenhum --aninhada --criterio-selecao rps \
-        --conjunto-final PARCIMONIOSO_BRADLEY --sufixo _aninhada_bradley
-    "$PY" experimento_iris.py --ausentes nativo --modelos floresta gradiente \
-        --bracos peso nenhum --aninhada --criterio-selecao rps \
-        --conjunto-final PARCIMONIOSO_MAIS --sufixo _aninhada_mais
-fi
-
-echo "== escopo 1, tratamento INDICADOR: so o alvo principal =="
-# Terceiro braco do experimento de tratamento de ausentes. Roda apenas o alvo
-# de quatro estagios, que e o do sistema; serve a tabela comparativa dos tres
-# tratamentos, nao a selecao de configuracao.
+echo "== estadiamento, tratamento INDICADOR: so o alvo de quatro estagios =="
 "$PY" experimento_iris.py --ausentes indicador
 
-echo "== interpretabilidade (SHAP) e sobrevida =="
+echo "== interpretabilidade (SHAP) =="
 "$PY" shap_estadiamento.py
-"$PY" sobrevida_discordancias.py --pasta escopo1_nativo
 
-echo "== escopo 2: ranqueamento de comorbidades =="
+echo "== recomendacao: comorbidades e exames =="
 "$PY" escopo2_comorbidades.py
-
-echo "== escopo 3: recomendacao de exames =="
 "$PY" escopo3_recomendador.py
 
 echo "== camada interpretativa: fichas dos pacientes =="
@@ -115,12 +90,12 @@ if [ -f saida/base/meta.json ]; then     # o que a indexacao extraiu e descartou
     cp saida/base/meta.json "$DESTINO/base_conhecimento_meta.json"
 fi
 cp modelagem.py avaliacao.py triagem.py experimento_iris.py \
-   shap_estadiamento.py sobrevida_discordancias.py auditar_colunas.py \
+   shap_estadiamento.py auditar_colunas.py \
    figuras.py escopo2_comorbidades.py escopo3_recomendador.py \
-   fichas_pacientes.py indexar_base.py camada_interpretativa.py "$DESTINO/"
+   fichas_pacientes.py indexar_base.py camada_interpretativa.py inventario.py "$DESTINO/"
 "$PY" -c "import hashlib;print(hashlib.sha256(open('Survival_data.csv','rb').read()).hexdigest())" \
     > "$DESTINO/sha256_survival_data.txt"
 
 echo
-echo "Rodada final concluida em $DESTINO"
-echo "Todos os numeros do TCC devem ser tirados desta pasta."
+echo "Execucao final concluida em $DESTINO"
+echo "Os numeros do texto saem desta pasta."
